@@ -33,6 +33,9 @@ dependencies = [
     "psycopg[binary]>=3.1.17",  # PostgreSQL driver (sync)
     "asyncpg>=0.29.0",  # PostgreSQL async driver
 
+    # Authentication
+    "bcrypt>=4.1.2",  # Password hashing
+
     # Kubernetes
     "kubernetes>=29.0.0",
     "kubernetes-asyncio>=29.0.0",  # Async support

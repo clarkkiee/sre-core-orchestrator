@@ -26,4 +26,7 @@ alembic-downgrade:
 alembic-history:
 	docker compose -f docker-compose.yml -f docker-compose.dev.yml exec api alembic history
 
-.PHONY: dev-up dev-up-build prod-up prod-up-build down alembic-revision alembic-upgrade alembic-downgrade alembic-history
+seed-admin:
+	docker compose -f docker-compose.yml -f docker-compose.dev.yml exec api python -m app.db.seeders --count $(count)
+
+.PHONY: dev-up dev-up-build prod-up prod-up-build down alembic-revision alembic-upgrade alembic-downgrade alembic-history seed-admin
