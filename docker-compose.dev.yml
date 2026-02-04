@@ -1,0 +1,39 @@
+services:
+  api:
+    build:
+      target: development
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # Debug port
+    volumes:
+      - ./app:/app/app:cached
+      - ./pipeline:/app/pipeline:cached
+      - ./alembic:/app/alembic:cached
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./alembic.ini:/app/alembic.ini:cached
+    environment:
+      - ENV=development
+      - LOG_LEVEL=DEBUG
+
+  db:
+    ports:
+      - "5432:5432"
+
+  rabbitmq:
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # Management UI
+
+  celery_worker:
+    build:
+      target: development
+    volumes:
+      - ./app:/app/app:cached
+      - ./pipeline:/app/pipeline:cached
+    environment:
+      - ENV=development
+      - LOG_LEVEL=DEBUG
+
+  nginx:
+    ports:
+      - "80:80"
