@@ -35,6 +35,7 @@ dependencies = [
 
     # Authentication
     "bcrypt>=4.1.2",  # Password hashing
+    "PyJWT>=2.8.0",  # JWT token creation and validation
 
     # Kubernetes
     "kubernetes>=29.0.0",

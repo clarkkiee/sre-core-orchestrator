@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from app.core.security import hash_password
+from app.utils.security import hash_password
 from app.db.session import async_session_maker
 from app.models.user import User
 

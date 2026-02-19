@@ -5,7 +5,8 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db.session import init_db, close_db
+from app.db.session import close_db, init_db
+from app.routers.auth import router as auth_router
 
 
 @asynccontextmanager
@@ -13,6 +14,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     yield
     await close_db()
+
+
 app = FastAPI(
     title="Chaos Platform Core",
     description="Chaos Engineering Reliability Testing Platform - Backend API",
@@ -23,7 +26,6 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Configure via environment in production
@@ -31,6 +33,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
+
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
