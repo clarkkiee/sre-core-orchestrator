@@ -1,4 +1,4 @@
-"""Shared FastAPI dependencies."""
+"""Centralized FastAPI dependency injection wiring."""
 import uuid
 from typing import Annotated
 
@@ -11,20 +11,38 @@ from app.db.session import get_db
 from app.exceptions.errors import Unauthorized
 from app.models.user import User
 from app.repositories.user import UserRepository
+from app.services.auth import AuthService
+from app.services.user import UserService
 from app.utils.jwt import decode_token
 
 bearer_scheme = HTTPBearer()
 
+# Database session
+DbSession = Annotated[AsyncSession, Depends(get_db)]
 
+# Repositories
+def get_user_repository(db: DbSession) -> UserRepository:
+    return UserRepository(db)
+
+UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
+
+# Services
+def get_auth_service(user_repository: UserRepositoryDep) -> AuthService:
+    return AuthService(user_repository=user_repository)
+
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+
+def get_user_service(user_repository: UserRepositoryDep) -> UserService:
+    return UserService(user_repository=user_repository)
+
+UserServiceDep = Annotated[UserService, Depends(get_user_service)]
+
+# Auth dependencies
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    user_repository: UserRepositoryDep,
 ) -> User:
-    """Decode the JWT and return the authenticated User.
-
-    Use as a dependency on protected endpoints:
-        current_user: Annotated[User, Depends(get_current_user)]
-    """
+    """Decode the JWT and return the authenticated User."""
     try:
         payload = decode_token(credentials.credentials)
         user_id_str: str | None = payload.get("sub")
@@ -34,8 +52,9 @@ async def get_current_user(
     except (InvalidTokenError, ValueError):
         raise Unauthorized("Invalid or expired token")
 
-    repo = UserRepository()
-    user = await repo.get_by_id(db, user_id)
+    user = await user_repository.get_by_id(user_id)
     if user is None or not user.is_active:
         raise Unauthorized("User not found or inactive")
     return user
+
+CurrentUser = Annotated[User, Depends(get_current_user)]

@@ -1,25 +1,59 @@
-from typing import Annotated
+from fastapi import APIRouter, status
 
-from fastapi import APIRouter, Depends, status
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.db.session import get_db
-from app.repositories.user import UserRepository
-from app.schemas.auth import LoginRequest, LoginResponse
-from app.services.auth import AuthService
+from app.dependencies import AuthServiceDep, CurrentUser
+from app.exceptions.errors import Conflict, Forbidden, Unauthorized, error_responses
+from app.schemas.auth import LoginRequest, LoginResponse, RegisterRequest, RegisterResponse
+from app.schemas.user import UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def get_auth_service() -> AuthService:
-    return AuthService(user_repository=UserRepository())
-
-
-@router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    status_code=status.HTTP_200_OK,
+    responses=error_responses(
+        (Unauthorized, "Invalid credentials"),
+        (Forbidden, "User account is disabled"),
+    ),
+)
 async def login(
     payload: LoginRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    auth_service: Annotated[AuthService, Depends(get_auth_service)],
+    auth_service: AuthServiceDep,
 ) -> LoginResponse:
     """Authenticate a user and return a JWT access token."""
-    return await auth_service.login(db, payload.email, payload.password)
+    return await auth_service.login(payload.email, payload.password)
+
+
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(
+        (Conflict, "User already registered"),
+    ),
+)
+async def register(
+    payload: RegisterRequest,
+    auth_service: AuthServiceDep,
+) -> RegisterResponse:
+    """Register a new user."""
+    return await auth_service.register(payload)
+
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    responses=error_responses(
+        (Unauthorized, "Invalid or expired token"),
+    ),
+)
+async def me(current_user: CurrentUser) -> UserResponse:
+    """Get the currently authenticated user's profile."""
+    return UserResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        is_admin=current_user.is_admin,
+        is_active=current_user.is_active,
+        created_at=current_user.created_at,
+        updated_at=current_user.updated_at,
+    )

@@ -2,11 +2,12 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.session import close_db, init_db
 from app.routers.auth import router as auth_router
+from app.routers.users import router as users_router
 
 
 @asynccontextmanager
@@ -34,16 +35,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
+api_router = APIRouter(prefix="/api/v1")
 
+api_router.include_router(auth_router)
+api_router.include_router(users_router)
 
-@app.get("/health")
+@api_router.get("/health")
 async def health_check() -> dict[str, str]:
     """Health check endpoint for container orchestration."""
     return {"status": "healthy"}
 
 
-@app.get("/")
+@api_router.get("/")
 async def root() -> dict[str, str]:
     """Root endpoint."""
     return {"message": "Chaos Platform Core API", "version": "1.0.0"}
+
+
+app.include_router(api_router)

@@ -1,4 +1,10 @@
 from fastapi import HTTPException, status
+from pydantic import BaseModel
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+
 
 class APIError(HTTPException):
     status_code: int
@@ -23,3 +29,28 @@ class Conflict(APIError):
 
 class InternalServerError(APIError):
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+def error_responses(
+    *errors: tuple[type[APIError], str],
+) -> dict[int, dict]:
+    """Build an OpenAPI responses dict from APIError subclasses.
+
+    Usage:
+        responses=error_responses(
+            (Unauthorized, "Invalid credentials"),
+            (Forbidden, "User account is disabled"),
+        )
+    """
+    return {
+        error_cls.status_code: {
+            "description": message,
+            "model": ErrorResponse,
+            "content": {
+             "application/json": {
+                    "example": {"detail": message},
+                },   
+            },
+        }
+        for error_cls, message in errors
+    }
