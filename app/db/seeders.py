@@ -1,27 +1,29 @@
 """Database seeders for initial data."""
+
 import argparse
 import asyncio
-
+import logging
 from uuid import uuid4
 
 from sqlalchemy import select
 
-from app.utils.security import hash_password
 from app.db.session import async_session_maker
 from app.models.user import User
+from app.utils.security import hash_password
+
+logger = logging.getLogger(__name__)
+
 
 async def create_admin_user(count: int) -> None:
     async with async_session_maker() as session:
         # Check if admin already exists
-        result = await session.execute(
-            select(User).where(User.is_admin == True)
-        )
+        result = await session.execute(select(User).where(User.is_admin.is_(True)))
         existing_admin = result.scalars().all()
 
         to_create = count - len(existing_admin)
 
         if to_create <= 0:
-            print("Admin user is already exists")
+            logger.info("Admin user already exists")
             return
 
         start_index = len(existing_admin)
@@ -40,19 +42,25 @@ async def create_admin_user(count: int) -> None:
 
         session.add_all(admins)
         await session.commit()
-        print(f"{len(admins)} admin user(s) created successfully.")
+        logger.info("%d admin user(s) created successfully.", len(admins))
+
 
 async def seed_database(count: int) -> None:
     """Run all seeders."""
-    print("Starting database seeding...")
+    logger.info("Starting database seeding...")
     await create_admin_user(count)
-    print("Database seeding completed.")
+    logger.info("Database seeding completed.")
 
 
 def run_seeder() -> None:
     """Entry point for running seeders."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--count", type=int, required=True, help="Number of admins to generate")
+    parser.add_argument(
+        "--count",
+        type=int,
+        required=True,
+        help="Number of admins to generate",
+    )
     args = parser.parse_args()
     asyncio.run(seed_database(args.count))
 

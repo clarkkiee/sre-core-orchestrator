@@ -1,7 +1,7 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter
 
 from app.dependencies import CurrentUser, UserServiceDep
-from app.exceptions.errors import Conflict, Unauthorized, error_responses
+from app.exceptions.errors import ConflictError, UnauthorizedError, error_responses
 from app.schemas.user import UpdateUserRequest, UserResponse
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -11,8 +11,8 @@ router = APIRouter(prefix="/users", tags=["users"])
     "/me",
     response_model=UserResponse,
     responses=error_responses(
-        (Unauthorized, "Invalid or expired token"),
-        (Conflict, "Email already in use"),
+        (UnauthorizedError, "Invalid or expired token"),
+        (ConflictError, "Email already in use"),
     ),
 )
 async def update_profile(

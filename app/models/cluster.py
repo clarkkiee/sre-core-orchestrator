@@ -1,20 +1,20 @@
 import enum
 import uuid
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import ForeignKey, String, Enum, Text, DateTime, func
-from sqlalchemy.orm import mapped_column, Mapped, relationship
-from sqlalchemy.dialects.postgresql import UUID, JSON
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
 
 if TYPE_CHECKING:
-    from app.models.user import User
     from app.models.job import Job
+    from app.models.user import User
 
 
-class ClusterStatus(str, enum.Enum):
+class ClusterStatus(enum.StrEnum):
     PENDING = "pending"
     PROVISIONING = "provisioning"
     READY = "ready"
@@ -129,7 +129,7 @@ class Cluster(Base):
         cascade="all, delete-orphan",
     )
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401
         if "expires_at" not in kwargs:
             kwargs["expires_at"] = datetime.now(UTC) + timedelta(days=7)
         super().__init__(**kwargs)
@@ -141,4 +141,6 @@ class Cluster(Base):
         return datetime.now(UTC) > self.expires_at
 
     def __repr__(self) -> str:
-        return f"<Cluster(id={self.id}, kind_name={self.kind_name}, status={self.status})>"
+        return (
+            f"<Cluster(id={self.id}, kind_name={self.kind_name}, status={self.status})>"
+        )

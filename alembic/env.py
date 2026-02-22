@@ -3,6 +3,7 @@
 import asyncio
 from logging.config import fileConfig
 
+import sqlalchemy
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -40,7 +41,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:
+def do_run_migrations(connection: sqlalchemy.Connection) -> None:
     """Run migrations with the given connection."""
     context.configure(connection=connection, target_metadata=target_metadata)
 

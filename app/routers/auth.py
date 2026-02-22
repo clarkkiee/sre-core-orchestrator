@@ -1,8 +1,18 @@
 from fastapi import APIRouter, status
 
 from app.dependencies import AuthServiceDep, CurrentUser
-from app.exceptions.errors import Conflict, Forbidden, Unauthorized, error_responses
-from app.schemas.auth import LoginRequest, LoginResponse, RegisterRequest, RegisterResponse
+from app.exceptions.errors import (
+    ConflictError,
+    ForbiddenError,
+    UnauthorizedError,
+    error_responses,
+)
+from app.schemas.auth import (
+    LoginRequest,
+    LoginResponse,
+    RegisterRequest,
+    RegisterResponse,
+)
 from app.schemas.user import UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -13,8 +23,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     response_model=LoginResponse,
     status_code=status.HTTP_200_OK,
     responses=error_responses(
-        (Unauthorized, "Invalid credentials"),
-        (Forbidden, "User account is disabled"),
+        (UnauthorizedError, "Invalid credentials"),
+        (ForbiddenError, "User account is disabled"),
     ),
 )
 async def login(
@@ -30,7 +40,7 @@ async def login(
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
     responses=error_responses(
-        (Conflict, "User already registered"),
+        (ConflictError, "User already registered"),
     ),
 )
 async def register(
@@ -40,11 +50,12 @@ async def register(
     """Register a new user."""
     return await auth_service.register(payload)
 
+
 @router.get(
     "/me",
     response_model=UserResponse,
     responses=error_responses(
-        (Unauthorized, "Invalid or expired token"),
+        (UnauthorizedError, "Invalid or expired token"),
     ),
 )
 async def me(current_user: CurrentUser) -> UserResponse:

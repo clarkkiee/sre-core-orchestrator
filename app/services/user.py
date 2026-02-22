@@ -1,4 +1,4 @@
-from app.exceptions.errors import Conflict
+from app.exceptions.errors import ConflictError
 from app.models.user import User
 from app.repositories.user import UserRepository
 from app.schemas.user import UpdateUserRequest, UserResponse
@@ -6,16 +6,21 @@ from app.utils.security import hash_password
 
 
 class UserService:
-    def __init__(self, user_repository: UserRepository):
+    def __init__(self, user_repository: UserRepository) -> None:
         self.user_repository = user_repository
 
-    async def update_profile(self, current_user: User, payload: UpdateUserRequest) -> UserResponse:
+    async def update_profile(
+        self,
+        current_user: User,
+        payload: UpdateUserRequest,
+    ) -> UserResponse:
         fields: dict[str, object] = {}
 
         if payload.email is not None and payload.email != current_user.email:
             existing = await self.user_repository.get_by_email(payload.email)
             if existing:
-                raise Conflict("Email already in use")
+                msg = "Email already in use"
+                raise ConflictError(msg)
             fields["email"] = payload.email
 
         if payload.password is not None:

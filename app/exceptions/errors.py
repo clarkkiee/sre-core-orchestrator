@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 
@@ -9,23 +11,28 @@ class ErrorResponse(BaseModel):
 class APIError(HTTPException):
     status_code: int
 
-    def __init__(self, detail: str):
+    def __init__(self, detail: str) -> None:
         super().__init__(
             status_code=self.status_code,
-            detail=detail
+            detail=detail,
         )
 
-class NotFound(APIError):
+
+class NotFoundError(APIError):
     status_code = status.HTTP_404_NOT_FOUND
 
-class Forbidden(APIError):
+
+class ForbiddenError(APIError):
     status_code = status.HTTP_403_FORBIDDEN
 
-class Unauthorized(APIError):
+
+class UnauthorizedError(APIError):
     status_code = status.HTTP_401_UNAUTHORIZED
 
-class Conflict(APIError):
+
+class ConflictError(APIError):
     status_code = status.HTTP_409_CONFLICT
+
 
 class InternalServerError(APIError):
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -33,13 +40,13 @@ class InternalServerError(APIError):
 
 def error_responses(
     *errors: tuple[type[APIError], str],
-) -> dict[int, dict]:
+) -> dict[int | str, dict[str, Any]]:
     """Build an OpenAPI responses dict from APIError subclasses.
 
     Usage:
         responses=error_responses(
-            (Unauthorized, "Invalid credentials"),
-            (Forbidden, "User account is disabled"),
+            (UnauthorizedError, "Invalid credentials"),
+            (ForbiddenError, "User account is disabled"),
         )
     """
     return {
@@ -47,9 +54,9 @@ def error_responses(
             "description": message,
             "model": ErrorResponse,
             "content": {
-             "application/json": {
+                "application/json": {
                     "example": {"detail": message},
-                },   
+                },
             },
         }
         for error_cls, message in errors

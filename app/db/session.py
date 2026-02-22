@@ -1,5 +1,6 @@
 """Database connection and session management."""
-from typing import AsyncGenerator
+
+from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -24,6 +25,7 @@ async_session_maker = async_sessionmaker(
     autocommit=False,
 )
 
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Dependency for getting async database session."""
     async with async_session_maker() as session:
@@ -34,9 +36,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.rollback()
             raise
 
+
 async def init_db() -> None:
     """Initialize database connection pool."""
-    pass
 
 
 async def close_db() -> None:
