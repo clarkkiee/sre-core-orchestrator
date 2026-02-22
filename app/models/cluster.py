@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from app.models.user import User
 
 
-class ClusterStatus(str, enum.Enum):
+class ClusterStatus(enum.StrEnum):
     PENDING = "pending"
     PROVISIONING = "provisioning"
     READY = "ready"

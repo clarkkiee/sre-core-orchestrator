@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from app.models.user import User
 
 
-class JobType(str, enum.Enum):
+class JobType(enum.StrEnum):
     PROVISION_CLUSTER = "PROVISION_CLUSTER"
     RUN_PIPELINE = "RUN_PIPELINE"
     TEARDOWN_CLUSTER = "TEARDOWN_CLUSTER"
@@ -22,7 +22,7 @@ class JobType(str, enum.Enum):
     CLEANUP_EXPIRED = "CLEANUP_EXPIRED"
 
 
-class JobStatus(str, enum.Enum):
+class JobStatus(enum.StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"

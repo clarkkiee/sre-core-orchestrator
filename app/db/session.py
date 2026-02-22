@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.core.config import settings
+from app.utils.config import settings
 
 # Create async engine
 engine = create_async_engine(
@@ -26,7 +26,7 @@ async_session_maker = async_sessionmaker(
 )
 
 
-async def get_db() -> AsyncGenerator[AsyncSession | None]:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Dependency for getting async database session."""
     async with async_session_maker() as session:
         try:
@@ -35,3 +35,12 @@ async def get_db() -> AsyncGenerator[AsyncSession | None]:
         except Exception:
             await session.rollback()
             raise
+
+
+async def init_db() -> None:
+    """Initialize database connection pool."""
+
+
+async def close_db() -> None:
+    """Close database connections."""
+    await engine.dispose()

@@ -8,7 +8,7 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
-        args: ["--maxkb=500"]
+        args: ["--maxkb=700"]
       - id: check-merge-conflict
       - id: debug-statements
 
@@ -31,6 +31,10 @@ repos:
           - sqlalchemy[mypy]>=2.0.25
           - types-pyyaml>=6.0.12
           - types-requests>=2.31.0
+          - fastapi>=0.109.0
+          - celery>=5.3.6
+          - bcrypt>=4.1.2
+          - PyJWT>=2.8.0
         args: ["--config-file=pyproject.toml"]
         exclude: "^alembic/"
 

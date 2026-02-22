@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     RABBITMQ_USER: str = "guest"
     RABBITMQ_PASSWORD: str = "guest"  # noqa: S105
 
+    # JWT
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRES_MINUTES: int = 30
+    JWT_REFRESH_TOKEN_EXPIRES_DAYS: int = 7
+    JWT_SECRET_KEY: str = "secret_key"  # noqa: S105
+
     # API
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
 
