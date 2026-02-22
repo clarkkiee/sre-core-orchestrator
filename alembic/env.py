@@ -3,14 +3,15 @@
 import asyncio
 from logging.config import fileConfig
 
+import sqlalchemy
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from app.core.config import settings
 
 # Import your models Base and settings
 from app.models import Base
-from app.core.config import settings
 
 # Alembic Config object
 config = context.config
@@ -40,7 +41,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:
+def do_run_migrations(connection: sqlalchemy.Connection) -> None:
     """Run migrations with the given connection."""
     context.configure(connection=connection, target_metadata=target_metadata)
 

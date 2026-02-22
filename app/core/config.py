@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "db"
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_PASSWORD: str = "postgres"  # noqa: S105
     POSTGRES_DB: str = "chaos_platform"
     POSTGRES_POOL_SIZE: int = 5
     POSTGRES_MAX_OVERFLOW: int = 10
@@ -26,13 +26,13 @@ class Settings(BaseSettings):
     RABBITMQ_HOST: str = "rabbitmq"
     RABBITMQ_PORT: int = 5672
     RABBITMQ_USER: str = "guest"
-    RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_PASSWORD: str = "guest"  # noqa: S105
 
     # API
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
 
     @property
-    def DATABASE_URL(self) -> str:
+    def DATABASE_URL(self) -> str:  # noqa: N802
         """Construct async database URL."""
         return (
             f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
         )
 
     @property
-    def DATABASE_URL_SYNC(self) -> str:
+    def DATABASE_URL_SYNC(self) -> str:  # noqa: N802
         """Construct sync database URL (for Alembic)."""
         return (
             f"postgresql+psycopg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         )
 
     @property
-    def CELERY_BROKER_URL(self) -> str:
+    def CELERY_BROKER_URL(self) -> str:  # noqa: N802
         """Construct Celery broker URL."""
         return (
             f"amqp://{self.RABBITMQ_USER}:{self.RABBITMQ_PASSWORD}"

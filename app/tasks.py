@@ -1,6 +1,7 @@
 """Celery application and task definitions."""
 
 import os
+from typing import Any
 
 from celery import Celery
 
@@ -50,25 +51,27 @@ celery_app.conf.update(
 celery_app.autodiscover_tasks(["app"])
 
 
-@celery_app.task(bind=True, name="app.tasks.example_task")
-def example_task(self, param: str) -> dict:
+@celery_app.task(bind=True, name="app.tasks.example_task")  # type: ignore[misc]
+def example_task(self: Any, param: str) -> dict[str, str]:  # noqa: ANN401
     """Example placeholder task.
 
     Args:
+        self: Celery task instance (injected by bind=True)
         param: Example parameter
 
     Returns:
         Task result dictionary
     """
+    _ = self  # Available for retries: self.retry()
     return {"status": "completed", "param": param}
 
 
-@celery_app.task(bind=True, name="app.tasks.long_running_chaos_experiment")
+@celery_app.task(bind=True, name="app.tasks.long_running_chaos_experiment")  # type: ignore[misc]
 def long_running_chaos_experiment(
-    self,
+    self: Any,  # noqa: ANN401
     experiment_id: str,
-    config: dict,
-) -> dict:
+    config: dict[str, Any],
+) -> dict[str, Any]:
     """Placeholder for long-running chaos experiment task.
 
     This task is designed for:
@@ -77,12 +80,14 @@ def long_running_chaos_experiment(
     - Automatic retry on failure
 
     Args:
+        self: Celery task instance (injected by bind=True)
         experiment_id: Unique experiment identifier
         config: Experiment configuration
 
     Returns:
         Experiment result dictionary
     """
+    _ = self  # Available for retries: self.retry()
     # TODO: Implement chaos experiment logic
     return {
         "experiment_id": experiment_id,

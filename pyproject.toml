@@ -64,6 +64,9 @@ dependencies = [
 
     # Task Queue
     "celery>=5.3.6",  # Distributed task queue
+
+    # Security
+    "bandit>=1.7.6",  # Security linter
 ]
 
 [project.optional-dependencies]
@@ -168,8 +171,6 @@ select = [
 ]
 
 ignore = [
-    "ANN101",  # Missing type annotation for self
-    "ANN102",  # Missing type annotation for cls
     "COM812",  # Trailing comma missing (conflicts with formatter)
     "ISC001",  # Implicit string concatenation (conflicts with formatter)
 ]
@@ -226,6 +227,9 @@ module = [
     "locust.*",
     "reportlab.*",
     "matplotlib.*",
+    "celery.*",
+    "fastapi.*",
+    "uvicorn.*",
 ]
 ignore_missing_imports = true
 
@@ -294,5 +298,12 @@ exclude_lines = [
 # =============================================================================
 # Alembic - Database migrations
 # =============================================================================
+# =============================================================================
+# Bandit - Security linter
+# =============================================================================
+[tool.bandit]
+exclude_dirs = ["tests", "alembic"]
+skips = ["B101"]  # Skip assert warnings (used in tests)
+
 [tool.alembic]
 script_location = "alembic"

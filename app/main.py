@@ -19,13 +19,13 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
+@app.get("/health")  # type: ignore[misc]
 async def health_check() -> dict[str, str]:
     """Health check endpoint for container orchestration."""
     return {"status": "healthy"}
 
 
-@app.get("/")
+@app.get("/")  # type: ignore[misc]
 async def root() -> dict[str, str]:
     """Root endpoint."""
     return {"message": "Chaos Platform Core API", "version": "1.0.0"}
