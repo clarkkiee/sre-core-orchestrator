@@ -30,6 +30,7 @@ services:
     volumes:
       - ./app:/app/app:cached
       - ./pipeline:/app/pipeline:cached
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - ENV=development
       - LOG_LEVEL=DEBUG
