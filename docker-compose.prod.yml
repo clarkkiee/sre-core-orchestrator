@@ -43,6 +43,10 @@ services:
     environment:
       - ENV=production
       - LOG_LEVEL=WARNING
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "0"
     deploy:
       resources:
         limits:

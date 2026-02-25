@@ -1,7 +1,7 @@
 # Multi-stage build
 
 # Stage 1 - Builder
-FROM python:3.12.1-slim as builder
+FROM python:3.12.1-slim AS builder
 
 WORKDIR /build
 
@@ -23,7 +23,7 @@ RUN uv venv /opt/venv && \
     uv pip install --no-cache -e .
 
 # Stage 2 - Development
-FROM python:3.12.1-slim as development
+FROM python:3.12.1-slim AS development
 
 WORKDIR /app
 
@@ -33,12 +33,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz | \
+    tar xz --strip-components=1 -C /usr/local/bin docker/docker && \
+    chmod +x /usr/local/bin/docker
+
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && \
     rm kubectl
 
+RUN curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64" && \
+    chmod +x /usr/local/bin/kind
+
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH" \
+ENV PATH="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -57,7 +64,7 @@ EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Stage 3 - Production
-FROM python:3.12-slim as production
+FROM python:3.12-slim AS production
 
 RUN groupadd -r appuser && \
     useradd -r -g appuser -u 1001 appuser
@@ -70,12 +77,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz | \
+    tar xz --strip-components=1 -C /usr/local/bin docker/docker && \
+    chmod +x /usr/local/bin/docker
+
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && \
     rm kubectl
 
+RUN curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64" && \
+    chmod +x /usr/local/bin/kind
+
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH" \
+ENV PATH="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app

@@ -227,6 +227,7 @@ plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
 [[tool.mypy.overrides]]
 module = [
     "kubernetes.*",
+    "kubernetes_asyncio.*",
     "prometheus_api_client.*",
     "locust.*",
     "reportlab.*",

@@ -1,5 +1,6 @@
 services:
   api:
+    container_name: orchestrator-be-api
     build:
       context: .
       dockerfile: Dockerfile
@@ -19,6 +20,7 @@ services:
       - app-network
 
   db:
+    container_name: orchestrator-db
     image: postgres:16-alpine
     env_file:
       - .env
@@ -38,6 +40,7 @@ services:
       - app-network
 
   rabbitmq:
+    container_name: orchestrator-rabbitmq
     image: rabbitmq:3-management-alpine
     env_file:
       - .env
@@ -56,6 +59,7 @@ services:
       - app-network
 
   celery_worker:
+    container_name: orchestrator-celery
     build:
       context: .
       dockerfile: Dockerfile
@@ -67,6 +71,10 @@ services:
       - POSTGRES_PORT=5432
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "0"
     depends_on:
       db:
         condition: service_healthy
@@ -76,6 +84,7 @@ services:
       - app-network
 
   nginx:
+    container_name: orchestrator-nginx
     build:
       context: ./docker/nginx
       dockerfile: Dockerfile

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.session import close_db, init_db
 from app.routers.auth import router as auth_router
+from app.routers.clusters import router as clusters_router
 from app.routers.users import router as users_router
 
 
@@ -40,6 +41,7 @@ api_router = APIRouter(prefix="/api/v1")
 
 api_router.include_router(auth_router)
 api_router.include_router(users_router)
+api_router.include_router(clusters_router)
 
 
 @api_router.get("/health")
