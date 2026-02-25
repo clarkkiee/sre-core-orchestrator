@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, status
+from fastapi.responses import Response
 
 from app.dependencies import ClusterServiceDep, CurrentUser
 from app.exceptions.errors import (
@@ -89,3 +90,26 @@ async def delete_cluster(
 ) -> DeleteClusterResponse:
     """Delete a KinD cluster (async via Celery)."""
     return await cluster_service.delete_cluster(current_user.id, cluster_id)
+
+
+@router.get(
+    "/{cluster_id}/kubeconfig",
+    responses=error_responses(
+        (UnauthorizedError, "Invalid or expired token"),
+        (NotFoundError, "Cluster not found or kubeconfig not available"),
+    ),
+)
+async def download_kubeconfig(
+    cluster_id: uuid.UUID,
+    current_user: CurrentUser,
+    cluster_service: ClusterServiceDep,
+) -> Response:
+    """Download the kubeconfig YAML for a cluster."""
+    content = await cluster_service.get_kubeconfig(current_user.id, cluster_id)
+    return Response(
+        content=content,
+        media_type="application/x-yaml",
+        headers={
+            "Content-Disposition": f"attachment; filename=kubeconfig-{cluster_id}.yaml",
+        },
+    )

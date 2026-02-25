@@ -124,6 +124,20 @@ class ClusterService:
         items = [ClusterResponse(**self._to_fields(c)) for c in clusters]
         return ClusterListResponse(clusters=items, total=len(items))
 
+    async def get_kubeconfig(
+        self,
+        tenant_id: uuid.UUID,
+        cluster_id: uuid.UUID,
+    ) -> str:
+        cluster = await self.cluster_repository.get_by_id(cluster_id)
+        if not cluster or cluster.tenant_id != tenant_id:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if not cluster.kubeconfig:
+            msg = "Kubeconfig not available for this cluster"
+            raise NotFoundError(msg)
+        return cluster.kubeconfig
+
     async def delete_cluster(
         self,
         tenant_id: uuid.UUID,
@@ -176,7 +190,7 @@ class ClusterService:
             "status_message": cluster.status_message,
             "app_preset": cluster.app_preset,
             "ports": cluster.ports,
-            "kubeconfig_path": cluster.kubeconfig_path,
+            "has_kubeconfig": cluster.kubeconfig is not None,
             "worker_count": ports.get("worker_count"),
             "created_at": cluster.created_at,
             "updated_at": cluster.updated_at,

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import tempfile
 
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client import ApiClient, Configuration
@@ -16,14 +17,13 @@ class KubernetesVerifier:
 
     async def verify_cluster_ready(
         self,
-        kubeconfig_path: str,
+        kubeconfig_content: str,
         timeout_seconds: int = 120,
         poll_interval: int = 5,
     ) -> bool:
         """Poll the cluster until all nodes report Ready or timeout."""
         logger.info(
-            "Waiting for cluster nodes to be ready (kubeconfig=%s, timeout=%ds)",
-            kubeconfig_path,
+            "Waiting for cluster nodes to be ready (timeout=%ds)",
             timeout_seconds,
         )
 
@@ -32,7 +32,7 @@ class KubernetesVerifier:
 
         while elapsed < timeout_seconds:
             try:
-                ready = await self._check_nodes_ready(kubeconfig_path)
+                ready = await self._check_nodes_ready(kubeconfig_content)
                 if ready:
                     logger.info("All cluster nodes are Ready")
                     return True
@@ -49,8 +49,16 @@ class KubernetesVerifier:
         )
         raise TimeoutError(msg)
 
-    async def _check_nodes_ready(self, kubeconfig_path: str) -> bool:
-        await config.load_kube_config(config_file=kubeconfig_path)
+    async def _check_nodes_ready(self, kubeconfig_content: str) -> bool:
+        # kubernetes-asyncio requires a file path, so write to a temp file
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".yaml",
+            delete=True,
+        ) as tmp:
+            tmp.write(kubeconfig_content)
+            tmp.flush()
+            await config.load_kube_config(config_file=tmp.name)
 
         # Disable SSL verification at the client level because the Kind API
         # server certificate is issued for 127.0.0.1/localhost, but we connect

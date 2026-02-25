@@ -77,6 +77,12 @@ class Cluster(Base):
         nullable=True,
     )
 
+    kubeconfig: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Kubeconfig YAML content stored directly in DB",
+    )
+
     ports: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,

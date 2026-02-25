@@ -40,7 +40,7 @@ class ClusterResponse(BaseModel):
     status_message: str | None
     app_preset: str | None
     ports: dict[str, Any] | None
-    kubeconfig_path: str | None
+    has_kubeconfig: bool = False
     worker_count: int | None
     created_at: datetime.datetime
     updated_at: datetime.datetime

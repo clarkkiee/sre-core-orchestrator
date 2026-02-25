@@ -260,7 +260,10 @@ async def _run_provisioning_phases(
     network = await kind_client.get_own_network()
     await kind_client.connect_to_network(cluster.kind_name, network)
     cp_ip = await kind_client.get_control_plane_ip(cluster.kind_name, network=network)
-    await kind_client.rewrite_kubeconfig_server(kubeconfig_path, cp_ip)
+    kubeconfig_content = await kind_client.rewrite_kubeconfig_server(
+        kubeconfig_path,
+        cp_ip,
+    )
 
     # Phase 4: VERIFYING
     await job_repo.update(
@@ -270,13 +273,13 @@ async def _run_provisioning_phases(
     )
     await session.commit()
 
-    await verifier.verify_cluster_ready(kubeconfig_path)
+    await verifier.verify_cluster_ready(kubeconfig_content)
 
     # Phase 5: COMPLETE
     await cluster_repo.update(
         cluster,
         status=ClusterStatus.READY,
-        kubeconfig_path=kubeconfig_path,
+        kubeconfig=kubeconfig_content,
         status_message="Cluster provisioned successfully",
     )
     await job_repo.update(
@@ -285,7 +288,6 @@ async def _run_provisioning_phases(
         current_phase="COMPLETE",
         progress_percentage=100,
         completed_at=datetime.now(UTC),
-        result={"kubeconfig_path": kubeconfig_path},
     )
     await session.commit()
 

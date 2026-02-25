@@ -199,14 +199,16 @@ class KindClient:
         kubeconfig_path: str | Path,
         control_plane_ip: str,
         internal_port: int = 6443,
-    ) -> None:
+    ) -> str:
         """Rewrite kubeconfig server URL to use the container's Docker network IP.
 
         Also disables TLS verification because the Kind API server certificate
         is issued for 127.0.0.1/localhost, not the container network IP.
+
+        Returns the rewritten kubeconfig YAML content.
         """
         path = Path(kubeconfig_path)
-        content = path.read_text(encoding="utf-8")
+        content = await asyncio.to_thread(path.read_text, "utf-8")
         kubeconfig = yaml.safe_load(content)
 
         new_server = f"https://{control_plane_ip}:{internal_port}"
@@ -217,5 +219,4 @@ class KindClient:
             cluster["cluster"].pop("certificate-authority-data", None)
             logger.info("Rewrote kubeconfig server: %s -> %s", old_server, new_server)
 
-        output = yaml.safe_dump(kubeconfig, sort_keys=False)
-        await asyncio.to_thread(path.write_text, output, "utf-8")
+        return yaml.safe_dump(kubeconfig, sort_keys=False)
