@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     # API
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
 
+    # Docker / Kind cluster provisioning
+    DOCKER_HOST: str | None = None  # For K8s DinD sidecar: "tcp://localhost:2375"
+    KIND_BINARY: str = "/usr/local/bin/kind"
+    KUBECTL_BINARY: str = "/usr/local/bin/kubectl"
+    KUBECONFIG_DIR: str = "/tmp/kubeconfigs"  # noqa: S108
+    KIND_PORT_RANGE_START: int = 30000
+    KIND_PORT_RANGE_END: int = 32767
+    KIND_PORTS_PER_BLOCK: int = 20
+    CLUSTER_DEFAULT_TTL_DAYS: int = 7
+    PRIVATE_REGISTRY_URL: str | None = None
+
     @property
     def DATABASE_URL(self) -> str:  # noqa: N802
         """Construct async database URL."""

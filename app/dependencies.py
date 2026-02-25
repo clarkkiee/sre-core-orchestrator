@@ -11,8 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.exceptions.errors import UnauthorizedError
 from app.models.user import User
+from app.repositories.cluster import ClusterRepository
+from app.repositories.job import JobRepository
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
+from app.services.cluster import ClusterService
 from app.services.user import UserService
 from app.utils.jwt import decode_token
 
@@ -43,6 +46,33 @@ def get_user_service(user_repository: UserRepositoryDep) -> UserService:
 
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
+
+
+# Cluster / Job repositories
+def get_cluster_repository(db: DbSession) -> ClusterRepository:
+    return ClusterRepository(db)
+
+
+def get_job_repository(db: DbSession) -> JobRepository:
+    return JobRepository(db)
+
+
+ClusterRepositoryDep = Annotated[ClusterRepository, Depends(get_cluster_repository)]
+JobRepositoryDep = Annotated[JobRepository, Depends(get_job_repository)]
+
+
+# Cluster service
+def get_cluster_service(
+    cluster_repository: ClusterRepositoryDep,
+    job_repository: JobRepositoryDep,
+) -> ClusterService:
+    return ClusterService(
+        cluster_repository=cluster_repository,
+        job_repository=job_repository,
+    )
+
+
+ClusterServiceDep = Annotated[ClusterService, Depends(get_cluster_service)]
 
 
 # Auth dependencies
