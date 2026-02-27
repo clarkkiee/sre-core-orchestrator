@@ -12,10 +12,12 @@ from app.db.session import get_db
 from app.exceptions.errors import UnauthorizedError
 from app.models.user import User
 from app.repositories.cluster import ClusterRepository
+from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
 from app.services.cluster import ClusterService
+from app.services.deployment import DeploymentService
 from app.services.user import UserService
 from app.utils.jwt import decode_token
 
@@ -73,6 +75,32 @@ def get_cluster_service(
 
 
 ClusterServiceDep = Annotated[ClusterService, Depends(get_cluster_service)]
+
+
+# Deployment repository
+def get_deployment_repository(db: DbSession) -> DeploymentRepository:
+    return DeploymentRepository(db)
+
+
+DeploymentRepositoryDep = Annotated[
+    DeploymentRepository, Depends(get_deployment_repository)
+]
+
+
+# Deployment service
+def get_deployment_service(
+    deployment_repository: DeploymentRepositoryDep,
+    cluster_repository: ClusterRepositoryDep,
+    job_repository: JobRepositoryDep,
+) -> DeploymentService:
+    return DeploymentService(
+        deployment_repository=deployment_repository,
+        cluster_repository=cluster_repository,
+        job_repository=job_repository,
+    )
+
+
+DeploymentServiceDep = Annotated[DeploymentService, Depends(get_deployment_service)]
 
 
 # Auth dependencies
