@@ -1,0 +1,122 @@
+"""Deployment service -- business logic for application deployments."""
+
+import uuid
+from typing import Any
+
+from app.exceptions.errors import ConflictError, NotFoundError
+from app.models.cluster import ClusterStatus
+from app.models.deployment import Deployment, DeploymentStatus, DeployStrategy
+from app.models.job import Job, JobStatus, JobType
+from app.repositories.cluster import ClusterRepository
+from app.repositories.deployment import DeploymentRepository
+from app.repositories.job import JobRepository
+from app.schemas.deployment import (
+    CreateDeploymentRequest,
+    DeploymentListResponse,
+    DeploymentResponse,
+    DeploymentWithJobResponse,
+)
+
+
+class DeploymentService:
+    def __init__(
+        self,
+        deployment_repository: DeploymentRepository,
+        cluster_repository: ClusterRepository,
+        job_repository: JobRepository,
+    ) -> None:
+        self.deployment_repository = deployment_repository
+        self.cluster_repository = cluster_repository
+        self.job_repository = job_repository
+
+    async def create_deployment(
+        self,
+        tenant_id: uuid.UUID,
+        payload: CreateDeploymentRequest,
+    ) -> DeploymentWithJobResponse:
+        # 1. Validate cluster exists, belongs to tenant, and is READY
+        cluster_id = uuid.UUID(payload.cluster_id)
+        cluster = await self.cluster_repository.get_by_id(cluster_id)
+        if not cluster or cluster.tenant_id != tenant_id:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if cluster.status != ClusterStatus.READY:
+            msg = f"Cluster is not ready (status: {cluster.status.value})"
+            raise ConflictError(msg)
+        if not cluster.kubeconfig:
+            msg = "Cluster kubeconfig is not available"
+            raise ConflictError(msg)
+
+        # 2. Create Deployment record (strategy updated after .platform.yaml parse)
+        deployment = Deployment(
+            tenant_id=tenant_id,
+            cluster_id=cluster_id,
+            repo_url=payload.repo_url,
+            branch=payload.branch or "main",
+            strategy=DeployStrategy.RAW,
+            namespace=payload.namespace,
+            status=DeploymentStatus.PENDING,
+        )
+        deployment = await self.deployment_repository.create(deployment)
+
+        # 3. Create Job record
+        job = Job(
+            tenant_id=tenant_id,
+            cluster_id=cluster_id,
+            deployment_id=deployment.id,
+            job_type=JobType.DEPLOY_APPLICATION,
+            status=JobStatus.PENDING,
+        )
+        job = await self.job_repository.create(job)
+
+        # 4. Dispatch Celery task
+        from app.tasks import deploy_application_task
+
+        celery_result = deploy_application_task.delay(
+            str(deployment.id),
+            str(job.id),
+            payload.github_token,
+        )
+        await self.job_repository.update(job, celery_task_id=celery_result.id)
+
+        return DeploymentWithJobResponse(
+            **self._to_fields(deployment),
+            job_id=str(job.id),
+            job_status=job.status.value,
+        )
+
+    async def get_deployment(
+        self,
+        tenant_id: uuid.UUID,
+        deployment_id: uuid.UUID,
+    ) -> DeploymentResponse:
+        deployment = await self.deployment_repository.get_by_id(deployment_id)
+        if not deployment or deployment.tenant_id != tenant_id:
+            msg = "Deployment not found"
+            raise NotFoundError(msg)
+        return DeploymentResponse(**self._to_fields(deployment))
+
+    async def list_deployments(
+        self,
+        tenant_id: uuid.UUID,
+    ) -> DeploymentListResponse:
+        deployments = await self.deployment_repository.list_by_tenant(tenant_id)
+        items = [DeploymentResponse(**self._to_fields(d)) for d in deployments]
+        return DeploymentListResponse(deployments=items, total=len(items))
+
+    @staticmethod
+    def _to_fields(deployment: Deployment) -> dict[str, Any]:
+        return {
+            "id": str(deployment.id),
+            "cluster_id": str(deployment.cluster_id),
+            "repo_url": deployment.repo_url,
+            "branch": deployment.branch,
+            "strategy": deployment.strategy.value,
+            "namespace": deployment.namespace,
+            "status": deployment.status.value,
+            "status_message": deployment.status_message,
+            "platform_config": deployment.platform_config,
+            "created_at": deployment.created_at,
+            "updated_at": deployment.updated_at,
+            "completed_at": deployment.completed_at,
+        }

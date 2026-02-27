@@ -11,6 +11,7 @@ from app.models import Base
 
 if TYPE_CHECKING:
     from app.models.cluster import Cluster
+    from app.models.deployment import Deployment
     from app.models.user import User
 
 
@@ -20,6 +21,7 @@ class JobType(enum.StrEnum):
     TEARDOWN_CLUSTER = "TEARDOWN_CLUSTER"
     COLLECT_BASELINE_METRICS = "COLLECT_BASELINE_METRICS"
     CLEANUP_EXPIRED = "CLEANUP_EXPIRED"
+    DEPLOY_APPLICATION = "DEPLOY_APPLICATION"
 
 
 class JobStatus(enum.StrEnum):
@@ -51,6 +53,14 @@ class Job(Base):
         ForeignKey("clusters.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+
+    deployment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("deployments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Associated deployment, if this job is a deploy task",
     )
 
     job_type: Mapped[JobType] = mapped_column(
@@ -114,6 +124,10 @@ class Job(Base):
     tenant: Mapped["User"] = relationship("User", back_populates="jobs")
     cluster: Mapped["Cluster | None"] = relationship(
         "Cluster",
+        back_populates="jobs",
+    )
+    deployment: Mapped["Deployment | None"] = relationship(
+        "Deployment",
         back_populates="jobs",
     )
 

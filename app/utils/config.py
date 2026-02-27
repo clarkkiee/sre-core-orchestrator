@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     CLUSTER_DEFAULT_TTL_DAYS: int = 7
     PRIVATE_REGISTRY_URL: str | None = None
 
+    # Deployment / Git settings
+    GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108
+
     @property
     def DATABASE_URL(self) -> str:  # noqa: N802
         """Construct async database URL."""

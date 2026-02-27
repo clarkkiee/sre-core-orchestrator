@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.deployment import Deployment
     from app.models.job import Job
     from app.models.user import User
 
@@ -131,6 +132,11 @@ class Cluster(Base):
     tenant: Mapped["User"] = relationship("User", back_populates="clusters")
     jobs: Mapped[list["Job"]] = relationship(
         "Job",
+        back_populates="cluster",
+        cascade="all, delete-orphan",
+    )
+    deployments: Mapped[list["Deployment"]] = relationship(
+        "Deployment",
         back_populates="cluster",
         cascade="all, delete-orphan",
     )
