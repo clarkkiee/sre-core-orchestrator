@@ -62,3 +62,26 @@ class DeleteClusterResponse(BaseModel):
     status: str
     job_id: str
     message: str
+
+
+class ClusterHealthResponse(BaseModel):
+    id: str
+    status: str
+    reachable: bool
+    detail: str
+
+
+class ReconnectClusterResponse(BaseModel):
+    id: str
+    status: str
+    job_id: str
+    message: str
+
+
+class AdminClusterResponse(ClusterResponse):
+    tenant_id: str
+
+
+class AdminClusterListResponse(BaseModel):
+    clusters: list[AdminClusterResponse]
+    total: int

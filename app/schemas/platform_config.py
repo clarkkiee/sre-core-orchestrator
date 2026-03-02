@@ -42,6 +42,14 @@ class SkaffoldConfig(BaseModel):
         default="./skaffold.yaml",
         description="Path to skaffold.yaml config",
     )
+    profile: str | None = Field(
+        default=None,
+        description="Skaffold profile to activate",
+    )
+    default_repo: str = Field(
+        default="",
+        description="Default image repo for skaffold (empty string for local builds)",
+    )
 
 
 class KustomizeConfig(BaseModel):

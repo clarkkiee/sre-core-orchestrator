@@ -156,6 +156,23 @@ def teardown_cluster_task(
     return asyncio.run(_teardown_cluster(cluster_id, job_id))
 
 
+@celery_app.task(  # type: ignore[misc]
+    bind=True,
+    name="app.tasks.reconnect_cluster",
+    max_retries=1,
+    soft_time_limit=300,
+    time_limit=360,
+)
+def reconnect_cluster_task(
+    self: Any,  # noqa: ANN401
+    cluster_id: str,
+    job_id: str,
+) -> dict[str, str]:
+    """Reconnect a KinD cluster (dispatched by ClusterService)."""
+    _ = self
+    return asyncio.run(_reconnect_cluster(cluster_id, job_id))
+
+
 # ---------------------------------------------------------------------------
 # Async provisioning implementation
 # ---------------------------------------------------------------------------
@@ -390,6 +407,145 @@ async def _teardown_cluster(
     return {"status": "deleted", "cluster_id": cluster_id}
 
 
+async def _reconnect_cluster(
+    cluster_id: str,
+    job_id: str,
+) -> dict[str, str]:
+    """Re-discover control-plane IP, rewrite kubeconfig, and verify health."""
+    from app.infrastructure.exceptions import KindCommandError
+
+    kind_client = KindClient(kind_binary=settings.KIND_BINARY)
+    verifier = KubernetesVerifier()
+    cid = uuid.UUID(cluster_id)
+    jid = uuid.UUID(job_id)
+
+    async with _make_session_maker()() as session:
+        cluster_repo = ClusterRepository(session)
+        job_repo = JobRepository(session)
+
+        cluster = await cluster_repo.get_by_id(cid)
+        job = await job_repo.get_by_id(jid)
+        if not cluster or not job:
+            msg = f"Cluster {cluster_id} or Job {job_id} not found"
+            raise ValueError(msg)
+
+        try:
+            # Phase 1: CHECK_CONTAINER (10%)
+            await job_repo.update(
+                job,
+                status=JobStatus.RUNNING,
+                started_at=datetime.now(UTC),
+                current_phase="CHECK_CONTAINER",
+                progress_percentage=10,
+            )
+            await session.commit()
+
+            container_name = f"{cluster.kind_name}-control-plane"
+            try:
+                await kind_client._docker("inspect", container_name)  # noqa: SLF001
+            except KindCommandError:
+                await cluster_repo.update(
+                    cluster,
+                    status=ClusterStatus.FAILED,
+                    status_message=(
+                        "Kind container no longer exists. "
+                        "Please delete this cluster and re-provision."
+                    ),
+                )
+                await job_repo.update(
+                    job,
+                    status=JobStatus.FAILED,
+                    current_phase="CHECK_CONTAINER",
+                    error_message="Kind container not found."
+                    "Cluster must be re-provisioned.",
+                    completed_at=datetime.now(UTC),
+                )
+                await session.commit()
+                return {
+                    "status": "failed",
+                    "cluster_id": cluster_id,
+                    "reason": "container_not_found",
+                }
+
+            # Phase 2: RECONNECT_NETWORK (30%)
+            await job_repo.update(
+                job,
+                current_phase="RECONNECT_NETWORK",
+                progress_percentage=30,
+            )
+            await session.commit()
+
+            network = await kind_client.get_own_network()
+            try:
+                await kind_client.connect_to_network(cluster.kind_name, network)
+            except KindCommandError as exc:
+                if "already exists" not in exc.stderr.lower():
+                    raise
+
+            # Phase 3: EXPORT_KUBECONFIG (50%)
+            await job_repo.update(
+                job,
+                current_phase="EXPORT_KUBECONFIG",
+                progress_percentage=50,
+            )
+            await session.commit()
+
+            kubeconfig_path = str(
+                Path(settings.KUBECONFIG_DIR) / f"kubeconfig-{cluster.kind_name}.yaml",
+            )
+            await kind_client.export_kubeconfig(cluster.kind_name, kubeconfig_path)
+
+            cp_ip = await kind_client.get_control_plane_ip(
+                cluster.kind_name,
+                network=network,
+            )
+            kubeconfig_content = await kind_client.rewrite_kubeconfig_server(
+                kubeconfig_path,
+                cp_ip,
+            )
+
+            # Phase 4: VERIFYING (75%)
+            await job_repo.update(
+                job,
+                current_phase="VERIFYING",
+                progress_percentage=75,
+            )
+            await session.commit()
+
+            await verifier.verify_cluster_ready(
+                kubeconfig_content,
+                timeout_seconds=60,
+            )
+
+            # Phase 5: COMPLETE (100%)
+            await cluster_repo.update(
+                cluster,
+                status=ClusterStatus.READY,
+                kubeconfig=kubeconfig_content,
+                status_message="Cluster reconnected successfully",
+            )
+            await job_repo.update(
+                job,
+                status=JobStatus.COMPLETED,
+                current_phase="COMPLETE",
+                progress_percentage=100,
+                completed_at=datetime.now(UTC),
+            )
+            await session.commit()
+
+        except Exception as exc:
+            await session.rollback()
+            logger.exception(
+                "Cluster reconnect failed",
+                extra={"cluster_id": cluster_id, "job_id": job_id},
+            )
+            await _record_failure(cid, jid, exc, prefix="Reconnect failed: ")
+            raise
+
+    logger.info("Cluster %s reconnected successfully", cluster_id)
+    return {"status": "reconnected", "cluster_id": cluster_id}
+
+
 # ---------------------------------------------------------------------------
 # Application deployment task
 # ---------------------------------------------------------------------------
@@ -458,8 +614,10 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
     from asyncio import to_thread
     from tempfile import mkdtemp
 
+    from app.infrastructure.cluster_health import ClusterHealthChecker
     from app.infrastructure.deployers.factory import DeployerFactory
     from app.infrastructure.git_client import GitClient
+    from app.models.cluster import ClusterStatus
     from app.models.deployment import DeploymentStatus, DeployStrategy
     from app.repositories.cluster import ClusterRepository
 
@@ -473,12 +631,34 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
     repo_path: Path | None = None
 
     try:
-        # Phase 1: CLONING_REPO (10%)
-        await deployment_repo.update(deployment, status=DeploymentStatus.CLONING)
+        # Phase 0: CHECKING_CLUSTER (5%)
         await job_repo.update(
             job,
             status=JobStatus.RUNNING,
             started_at=datetime.now(UTC),
+            current_phase="CHECKING_CLUSTER",
+            progress_percentage=5,
+        )
+        await session.commit()
+
+        health_checker = ClusterHealthChecker()
+        reachable, health_detail = await health_checker.check_reachable(
+            cluster.kubeconfig,
+        )
+        if not reachable:
+            await cluster_repo.update(
+                cluster,
+                status=ClusterStatus.UNREACHABLE,
+                status_message=health_detail,
+            )
+            await session.commit()
+            msg = f"Cluster is unreachable: {health_detail}"
+            raise RuntimeError(msg)
+
+        # Phase 1: CLONING_REPO (10%)
+        await deployment_repo.update(deployment, status=DeploymentStatus.CLONING)
+        await job_repo.update(
+            job,
             current_phase="CLONING_REPO",
             progress_percentage=10,
         )
