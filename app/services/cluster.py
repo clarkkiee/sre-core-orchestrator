@@ -11,11 +11,15 @@ from app.models.job import Job, JobStatus, JobType
 from app.repositories.cluster import ClusterRepository
 from app.repositories.job import JobRepository
 from app.schemas.cluster import (
+    AdminClusterListResponse,
+    AdminClusterResponse,
+    ClusterHealthResponse,
     ClusterListResponse,
     ClusterResponse,
     ClusterWithJobResponse,
     CreateClusterRequest,
     DeleteClusterResponse,
+    ReconnectClusterResponse,
 )
 from app.utils.config import settings
 
@@ -178,6 +182,126 @@ class ClusterService:
             job_id=str(job.id),
             message="Cluster teardown initiated",
         )
+
+    async def check_health(
+        self,
+        tenant_id: uuid.UUID,
+        cluster_id: uuid.UUID,
+    ) -> ClusterHealthResponse:
+        """Check whether a cluster's Kubernetes API server is reachable."""
+        cluster = await self.cluster_repository.get_by_id(cluster_id)
+        if not cluster or cluster.tenant_id != tenant_id:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+
+        if cluster.status in (ClusterStatus.DELETING, ClusterStatus.DELETED):
+            return ClusterHealthResponse(
+                id=str(cluster.id),
+                status=cluster.status.value,
+                reachable=False,
+                detail="Cluster has been deleted",
+            )
+
+        if not cluster.kubeconfig:
+            return ClusterHealthResponse(
+                id=str(cluster.id),
+                status=cluster.status.value,
+                reachable=False,
+                detail="Cluster has no kubeconfig (not yet provisioned?)",
+            )
+
+        from app.infrastructure.cluster_health import ClusterHealthChecker
+
+        checker = ClusterHealthChecker()
+        reachable, detail = await checker.check_reachable(cluster.kubeconfig)
+
+        # Update status based on health check result
+        if not reachable and cluster.status == ClusterStatus.READY:
+            await self.cluster_repository.update(
+                cluster,
+                status=ClusterStatus.UNREACHABLE,
+                status_message=detail,
+            )
+        elif reachable and cluster.status == ClusterStatus.UNREACHABLE:
+            await self.cluster_repository.update(
+                cluster,
+                status=ClusterStatus.READY,
+                status_message="Cluster reachable again",
+            )
+
+        return ClusterHealthResponse(
+            id=str(cluster.id),
+            status=cluster.status.value,
+            reachable=reachable,
+            detail=detail,
+        )
+
+    async def _dispatch_reconnect(self, cluster: Cluster) -> ReconnectClusterResponse:
+        """Create a reconnect job and dispatch the Celery task."""
+        if cluster.status in (ClusterStatus.DELETING, ClusterStatus.DELETED):
+            msg = "Cannot reconnect a deleted cluster"
+            raise ConflictError(msg)
+        if cluster.status == ClusterStatus.PROVISIONING:
+            msg = "Cluster is still provisioning"
+            raise ConflictError(msg)
+
+        job = Job(
+            tenant_id=cluster.tenant_id,
+            cluster_id=cluster.id,
+            job_type=JobType.RECONNECT_CLUSTER,
+            status=JobStatus.PENDING,
+        )
+        job = await self.job_repository.create(job)
+
+        from app.tasks import reconnect_cluster_task
+
+        celery_result = reconnect_cluster_task.delay(
+            str(cluster.id),
+            str(job.id),
+        )
+        await self.job_repository.update(job, celery_task_id=celery_result.id)
+
+        return ReconnectClusterResponse(
+            id=str(cluster.id),
+            status=cluster.status.value,
+            job_id=str(job.id),
+            message="Cluster reconnect initiated",
+        )
+
+    async def reconnect_cluster(
+        self,
+        tenant_id: uuid.UUID,
+        cluster_id: uuid.UUID,
+    ) -> ReconnectClusterResponse:
+        """Reconnect a cluster (tenant-scoped)."""
+        cluster = await self.cluster_repository.get_by_id(cluster_id)
+        if not cluster or cluster.tenant_id != tenant_id:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        return await self._dispatch_reconnect(cluster)
+
+    async def admin_list_clusters(self) -> AdminClusterListResponse:
+        """List all clusters across all tenants (admin only)."""
+        clusters = await self.cluster_repository.list_all()
+        items = [
+            AdminClusterResponse(
+                **self._to_fields(c),
+                tenant_id=str(c.tenant_id),
+            )
+            for c in clusters
+        ]
+        return AdminClusterListResponse(clusters=items, total=len(items))
+
+    async def admin_reconnect_cluster(
+        self,
+        cluster_id: uuid.UUID,
+    ) -> ReconnectClusterResponse:
+        """Reconnect any cluster regardless of tenant (admin only)."""
+        cluster = await self.cluster_repository.get_by_id(cluster_id)
+        if not cluster:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        return await self._dispatch_reconnect(cluster)
 
     @staticmethod
     def _to_fields(cluster: Cluster) -> dict[str, Any]:

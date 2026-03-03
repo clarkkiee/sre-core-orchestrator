@@ -13,11 +13,13 @@ from app.exceptions.errors import (
     error_responses,
 )
 from app.schemas.cluster import (
+    ClusterHealthResponse,
     ClusterListResponse,
     ClusterResponse,
     ClusterWithJobResponse,
     CreateClusterRequest,
     DeleteClusterResponse,
+    ReconnectClusterResponse,
 )
 
 router = APIRouter(prefix="/clusters", tags=["clusters"])
@@ -90,6 +92,42 @@ async def delete_cluster(
 ) -> DeleteClusterResponse:
     """Delete a KinD cluster (async via Celery)."""
     return await cluster_service.delete_cluster(current_user.id, cluster_id)
+
+
+@router.post(
+    "/{cluster_id}/reconnect",
+    response_model=ReconnectClusterResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses(
+        (UnauthorizedError, "Invalid or expired token"),
+        (NotFoundError, "Cluster not found"),
+        (ConflictError, "Cluster cannot be reconnected in current state"),
+    ),
+)
+async def reconnect_cluster(
+    cluster_id: uuid.UUID,
+    current_user: CurrentUser,
+    cluster_service: ClusterServiceDep,
+) -> ReconnectClusterResponse:
+    """Reconnect a KinD cluster whose network may have changed (async via Celery)."""
+    return await cluster_service.reconnect_cluster(current_user.id, cluster_id)
+
+
+@router.get(
+    "/{cluster_id}/health",
+    response_model=ClusterHealthResponse,
+    responses=error_responses(
+        (UnauthorizedError, "Invalid or expired token"),
+        (NotFoundError, "Cluster not found"),
+    ),
+)
+async def check_cluster_health(
+    cluster_id: uuid.UUID,
+    current_user: CurrentUser,
+    cluster_service: ClusterServiceDep,
+) -> ClusterHealthResponse:
+    """Check whether a cluster's Kubernetes API server is reachable."""
+    return await cluster_service.check_health(current_user.id, cluster_id)
 
 
 @router.get(

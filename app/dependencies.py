@@ -9,7 +9,7 @@ from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.exceptions.errors import UnauthorizedError
+from app.exceptions.errors import ForbiddenError, UnauthorizedError
 from app.models.user import User
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
@@ -128,3 +128,14 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_admin_user(current_user: CurrentUser) -> User:
+    """Require the authenticated user to be an admin."""
+    if not current_user.is_admin:
+        msg = "Admin access required"
+        raise ForbiddenError(msg)
+    return current_user
+
+
+AdminUser = Annotated[User, Depends(get_admin_user)]

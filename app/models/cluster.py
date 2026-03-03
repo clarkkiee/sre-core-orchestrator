@@ -19,6 +19,7 @@ class ClusterStatus(enum.StrEnum):
     PENDING = "pending"
     PROVISIONING = "provisioning"
     READY = "ready"
+    UNREACHABLE = "unreachable"
     FAILED = "failed"
     DELETING = "deleting"
     DELETED = "deleted"

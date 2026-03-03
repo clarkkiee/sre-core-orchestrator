@@ -14,16 +14,23 @@ class SkaffoldDeployer(BaseDeployer):
 
     async def deploy(self) -> str:
         config_path = str(Path(self.repo_path) / self.strategy_config.config_path)
-        logger.info("Running skaffold deploy with config %s", config_path)
+        logger.info("Running skaffold run with config %s", config_path)
 
-        return await self._run_command(
+        cmd = [
             "skaffold",
-            "deploy",
+            "run",
             "-f",
             config_path,
             "--namespace",
             self.namespace,
-        )
+            "--default-repo",
+            self.strategy_config.default_repo,
+        ]
+
+        if self.strategy_config.profile:
+            cmd.extend(["--profile", self.strategy_config.profile])
+
+        return await self._run_command(*cmd)
 
     async def verify(self) -> bool:
         output = await self._run_command(

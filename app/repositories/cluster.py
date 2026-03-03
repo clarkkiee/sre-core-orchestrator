@@ -51,6 +51,19 @@ class ClusterRepository:
         await self.db.refresh(cluster)
         return cluster
 
+    async def list_all(
+        self,
+        *,
+        include_deleted: bool = False,
+    ) -> list[Cluster]:
+        """Return all clusters across all tenants."""
+        stmt = select(Cluster)
+        if not include_deleted:
+            stmt = stmt.where(Cluster.status != ClusterStatus.DELETED)
+        stmt = stmt.order_by(Cluster.created_at.desc())
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def acquire_port_allocation_lock(self) -> None:
         """Acquire a PostgreSQL advisory lock for port-block allocation.
 
