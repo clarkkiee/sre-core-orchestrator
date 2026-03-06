@@ -9,7 +9,7 @@ import yaml
 from git import Repo
 from git.exc import GitCommandError
 
-from app.infrastructure.exceptions import GitCloneError
+from app.infrastructure.git.exceptions import GitCloneError
 from app.schemas.platform_config import PlatformConfig
 
 logger = logging.getLogger(__name__)
