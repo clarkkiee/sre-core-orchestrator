@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.exceptions.errors import ConflictError, NotFoundError
-from app.infrastructure.kind_config import KindConfigBuilder
+from app.infrastructure.kind import KindConfigBuilder
 from app.models.cluster import Cluster, ClusterStatus
 from app.models.job import Job, JobStatus, JobType
 from app.repositories.cluster import ClusterRepository
@@ -210,7 +210,7 @@ class ClusterService:
                 detail="Cluster has no kubeconfig (not yet provisioned?)",
             )
 
-        from app.infrastructure.cluster_health import ClusterHealthChecker
+        from app.infrastructure.kubernetes import ClusterHealthChecker
 
         checker = ClusterHealthChecker()
         reachable, detail = await checker.check_reachable(cluster.kubeconfig)

@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Any
 
-from app.infrastructure.exceptions import DeployerCommandError
+from app.infrastructure.deployers.exceptions import DeployerCommandError
 
 logger = logging.getLogger(__name__)
 

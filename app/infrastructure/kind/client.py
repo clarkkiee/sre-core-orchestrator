@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from app.infrastructure.exceptions import KindCommandError
+from app.infrastructure.kind.exceptions import KindCommandError
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
