@@ -233,11 +233,19 @@ module = [
     "reportlab.*",
     "matplotlib.*",
     "celery.*",
+    "httpx",
+    "httpx.*",
     "uvicorn.*",
     "bcrypt",
     "jwt.*",
+    "pytest",
+    "pytest.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_decorators = false
 
 # =============================================================================
 # Pytest - Testing framework

@@ -11,6 +11,7 @@ from app.tasks.cluster_tasks import (
     teardown_cluster_task,
 )
 from app.tasks.deployment_tasks import deploy_application_task
+from app.tasks.observability_tasks import collect_metrics_task
 from app.tasks.placeholder_tasks import (
     example_task,
     long_running_chaos_experiment,
@@ -18,6 +19,7 @@ from app.tasks.placeholder_tasks import (
 
 __all__ = [
     "celery_app",
+    "collect_metrics_task",
     "deploy_application_task",
     "example_task",
     "long_running_chaos_experiment",
