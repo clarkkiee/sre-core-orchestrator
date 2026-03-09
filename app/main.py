@@ -11,6 +11,7 @@ from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
 from app.routers.clusters import router as clusters_router
 from app.routers.deployments import router as deployments_router
+from app.routers.observability import router as observability_router
 from app.routers.users import router as users_router
 
 
@@ -45,6 +46,7 @@ api_router.include_router(auth_router)
 api_router.include_router(users_router)
 api_router.include_router(clusters_router)
 api_router.include_router(deployments_router)
+api_router.include_router(observability_router)
 api_router.include_router(admin_router)
 
 

@@ -14,10 +14,12 @@ from app.models.user import User
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
+from app.repositories.observability import ObservabilityRepository
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
 from app.services.cluster import ClusterService
 from app.services.deployment import DeploymentService
+from app.services.observability import ObservabilityService
 from app.services.user import UserService
 from app.utils.jwt import decode_token
 
@@ -139,3 +141,33 @@ async def get_admin_user(current_user: CurrentUser) -> User:
 
 
 AdminUser = Annotated[User, Depends(get_admin_user)]
+
+
+# Observability repository
+def get_observability_repository(db: DbSession) -> ObservabilityRepository:
+    return ObservabilityRepository(db)
+
+
+ObservabilityRepositoryDep = Annotated[
+    ObservabilityRepository, Depends(get_observability_repository)
+]
+
+
+# Observability service
+def get_observability_service(
+    observability_repository: ObservabilityRepositoryDep,
+    cluster_repository: ClusterRepositoryDep,
+    deployment_repository: DeploymentRepositoryDep,
+    job_repository: JobRepositoryDep,
+) -> ObservabilityService:
+    return ObservabilityService(
+        observability_repository=observability_repository,
+        cluster_repository=cluster_repository,
+        deployment_repository=deployment_repository,
+        job_repository=job_repository,
+    )
+
+
+ObservabilityServiceDep = Annotated[
+    ObservabilityService, Depends(get_observability_service)
+]
