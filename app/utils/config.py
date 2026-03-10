@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     CLUSTER_DEFAULT_TTL_DAYS: int = 7
     PRIVATE_REGISTRY_URL: str | None = None
 
+    # Monitoring stack images
+    VM_IMAGE: str = "victoriametrics/victoria-metrics:v1.108.1"
+    KSM_IMAGE: str = "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0"
+    VM_NODEPORT: int = 30090
+
     # Deployment / Git settings
     GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108
 
