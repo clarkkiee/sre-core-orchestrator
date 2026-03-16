@@ -8,6 +8,7 @@ from typing import Any
 from app.infrastructure.kind import KindClient, KindCommandError
 from app.infrastructure.kind.config_builder import KindConfigBuilder
 from app.infrastructure.kubernetes import KubernetesVerifier
+from app.infrastructure.metrics.deployer import MonitoringStackDeployer
 from app.models.cluster import ClusterStatus
 from app.models.job import JobStatus
 from app.repositories.cluster import ClusterRepository
@@ -116,7 +117,7 @@ async def _run_provisioning_phases(
     )
     verifier = KubernetesVerifier()
 
-    # Phase 1: BUILDING_CONFIG
+    # Phase 1: BUILDING_CONFIG (10%)
     await cluster_repo.update(cluster, status=ClusterStatus.PROVISIONING)
     await job_repo.update(
         job,
@@ -140,22 +141,22 @@ async def _run_provisioning_phases(
         Path(settings.KUBECONFIG_DIR) / f"kind-config-{cluster.kind_name}.yaml",
     )
 
-    # Phase 2: CREATING_CLUSTER
+    # Phase 2: CREATING_CLUSTER (25%)
     await job_repo.update(
         job,
         current_phase="CREATING_CLUSTER",
-        progress_percentage=30,
+        progress_percentage=25,
     )
     await session.commit()
 
     if not await kind_client.cluster_exists(cluster.kind_name):
         await kind_client.create_cluster(cluster.kind_name, str(config_path))
 
-    # Phase 3: EXPORTING_KUBECONFIG
+    # Phase 3: EXPORTING_KUBECONFIG (45%)
     await job_repo.update(
         job,
         current_phase="EXPORTING_KUBECONFIG",
-        progress_percentage=60,
+        progress_percentage=45,
     )
     await session.commit()
 
@@ -174,17 +175,34 @@ async def _run_provisioning_phases(
         cp_ip,
     )
 
-    # Phase 4: VERIFYING
+    # Phase 4: VERIFYING (60%)
     await job_repo.update(
         job,
         current_phase="VERIFYING",
-        progress_percentage=80,
+        progress_percentage=60,
     )
     await session.commit()
 
     await verifier.verify_cluster_ready(kubeconfig_content)
 
-    # Phase 5: COMPLETE
+    # Phase 5: DEPLOYING_MONITORING (80%)
+    await job_repo.update(
+        job,
+        current_phase="DEPLOYING_MONITORING",
+        progress_percentage=80,
+    )
+    await session.commit()
+
+    monitoring_deployer = MonitoringStackDeployer(
+        vm_image=settings.VM_IMAGE,
+        ksm_image=settings.KSM_IMAGE,
+        vm_nodeport=settings.VM_NODEPORT,
+    )
+    vm_url = await monitoring_deployer.deploy(kubeconfig_content, cp_ip)
+    await cluster_repo.update(cluster, victoriametrics_url=vm_url)
+    await session.commit()
+
+    # Phase 6: COMPLETE (100%)
     await cluster_repo.update(
         cluster,
         status=ClusterStatus.READY,
@@ -271,6 +289,20 @@ async def _teardown_cluster(
 
             if await kind_client.cluster_exists(cluster.kind_name):
                 await kind_client.delete_cluster(cluster.kind_name)
+
+            # Soft-delete all active deployments on this cluster
+            from app.models.deployment import DeploymentStatus
+            from app.repositories.deployment import DeploymentRepository
+
+            deployment_repo = DeploymentRepository(session)
+            active_deployments = await deployment_repo.list_by_cluster(cid)
+            for dep in active_deployments:
+                await deployment_repo.update(
+                    dep,
+                    status=DeploymentStatus.DELETED,
+                    deleted_at=datetime.now(UTC),
+                    status_message="Deleted due to cluster teardown",
+                )
 
             await cluster_repo.update(
                 cluster,

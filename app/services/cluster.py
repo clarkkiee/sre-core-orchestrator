@@ -94,6 +94,8 @@ class ClusterService:
         )
         job = await self.job_repository.create(job)
 
+        await self.job_repository.db.commit()
+
         # Dispatch Celery task (imported here to avoid circular imports)
         from app.tasks import provision_cluster_task
 
@@ -167,6 +169,8 @@ class ClusterService:
             status=JobStatus.PENDING,
         )
         job = await self.job_repository.create(job)
+
+        await self.job_repository.db.commit()
 
         from app.tasks import teardown_cluster_task
 
@@ -252,6 +256,8 @@ class ClusterService:
             status=JobStatus.PENDING,
         )
         job = await self.job_repository.create(job)
+
+        await self.job_repository.db.commit()
 
         from app.tasks import reconnect_cluster_task
 

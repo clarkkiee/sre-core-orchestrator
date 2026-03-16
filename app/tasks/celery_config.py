@@ -32,9 +32,9 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     # long running tasks config
-    task_acks_late=True,
+    task_acks_late=False,
     task_reject_on_worker_lost=True,
-    worker_prefetch_multiplier=1,
+    worker_prefetch_multiplier=4,
     task_time_limit=3600,
     task_soft_time_limit=3300,
     result_expires=86400,

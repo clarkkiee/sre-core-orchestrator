@@ -22,6 +22,8 @@ class DeploymentStatus(enum.StrEnum):
     DEPLOYING = "DEPLOYING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    DELETING = "DELETING"
+    DELETED = "DELETED"
 
 
 class DeployStrategy(enum.StrEnum):
@@ -119,6 +121,12 @@ class Deployment(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="The deletion time of the deployment",
     )
 
     # Relationships

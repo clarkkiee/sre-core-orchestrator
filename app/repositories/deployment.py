@@ -31,6 +31,20 @@ class DeploymentRepository:
         stmt = (
             select(Deployment)
             .where(Deployment.tenant_id == tenant_id)
+            .where(Deployment.deleted_at.is_(None))
+            .order_by(Deployment.created_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_by_cluster(
+        self,
+        cluster_id: uuid.UUID,
+    ) -> list[Deployment]:
+        stmt = (
+            select(Deployment)
+            .where(Deployment.cluster_id == cluster_id)
+            .where(Deployment.deleted_at.is_(None))
             .order_by(Deployment.created_at.desc())
         )
         result = await self.db.execute(stmt)

@@ -15,6 +15,11 @@ from app.models.deployment import (  # noqa: E402
     DeployStrategy,
 )
 from app.models.job import Job, JobStatus, JobType  # noqa: E402
+from app.models.observability import (  # noqa: E402
+    MetricSnapshot,
+    ObservabilitySession,
+    ReliabilityReport,
+)
 from app.models.user import User  # noqa: E402
 
 __all__ = [
@@ -26,5 +31,8 @@ __all__ = [
     "Job",
     "JobStatus",
     "JobType",
+    "MetricSnapshot",
+    "ObservabilitySession",
+    "ReliabilityReport",
     "User",
 ]

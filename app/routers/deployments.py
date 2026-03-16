@@ -13,6 +13,7 @@ from app.exceptions.errors import (
 )
 from app.schemas.deployment import (
     CreateDeploymentRequest,
+    DeleteDeploymentResponse,
     DeploymentListResponse,
     DeploymentResponse,
     DeploymentWithJobResponse,
@@ -70,3 +71,22 @@ async def get_deployment(
 ) -> DeploymentResponse:
     """Get a specific deployment's status and details."""
     return await deployment_service.get_deployment(current_user.id, deployment_id)
+
+
+@router.delete(
+    "/{deployment_id}",
+    response_model=DeleteDeploymentResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses(
+        (UnauthorizedError, "Invalid or expired token"),
+        (NotFoundError, "Deployment not found"),
+        (ConflictError, "Deployment is already being deleted"),
+    ),
+)
+async def delete_deployment(
+    deployment_id: uuid.UUID,
+    current_user: CurrentUser,
+    deployment_service: DeploymentServiceDep,
+) -> DeleteDeploymentResponse:
+    """Delete a deployment and clean up its K8s resources (async via Celery)."""
+    return await deployment_service.delete_deployment(current_user.id, deployment_id)

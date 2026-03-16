@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # JWT
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRES_MINUTES: int = 30
+    JWT_ACCESS_TOKEN_EXPIRES_MINUTES: int = 120
     JWT_REFRESH_TOKEN_EXPIRES_DAYS: int = 7
     JWT_SECRET_KEY: str = "secret_key"  # noqa: S105
 
@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     KIND_PORTS_PER_BLOCK: int = 20
     CLUSTER_DEFAULT_TTL_DAYS: int = 7
     PRIVATE_REGISTRY_URL: str | None = None
+
+    # Monitoring stack images
+    VM_IMAGE: str = "victoriametrics/victoria-metrics:v1.108.1"
+    KSM_IMAGE: str = "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0"
+    VM_NODEPORT: int = 30090
 
     # Deployment / Git settings
     GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108
