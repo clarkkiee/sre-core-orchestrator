@@ -63,7 +63,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: celery -A app.tasks worker --loglevel=info
+    command: celery -A app.tasks worker --loglevel=info --concurrency=4
     env_file:
       - .env
     environment:

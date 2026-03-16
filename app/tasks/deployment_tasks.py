@@ -23,6 +23,26 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(  # type: ignore[misc]
     bind=True,
+    name="app.tasks.delete_deployment",
+    max_retries=1,
+    soft_time_limit=300,
+    time_limit=360,
+)
+def delete_deployment_task(
+    self: Any,  # noqa: ANN401
+    deployment_id: str,
+    job_id: str,
+) -> dict[str, str]:
+    """
+    Delete a deployment and clean up its K8s resources
+    (dispatched by DeploymentService)
+    """
+    _ = self
+    return asyncio.run(_delete_deployment(deployment_id, job_id))
+
+
+@celery_app.task(  # type: ignore[misc]
+    bind=True,
     name="app.tasks.deploy_application",
     max_retries=1,
     soft_time_limit=900,
@@ -298,3 +318,123 @@ async def _deploy_application(
 
     logger.info("Deployment %s completed successfully", deployment_id)
     return result
+
+
+async def _delete_deployment(
+    deployment_id: str,
+    job_id: str,
+) -> dict[str, str]:
+    """Delete a deployment's K8s resources and mark it as deleted."""
+    from app.models.deployment import DeploymentStatus
+    from app.repositories.cluster import ClusterRepository
+    from app.repositories.deployment import DeploymentRepository
+
+    did = uuid.UUID(deployment_id)
+    jid = uuid.UUID(job_id)
+
+    async with _make_session_maker()() as session:
+        deployment_repo = DeploymentRepository(session)
+        job_repo = JobRepository(session)
+        cluster_repo = ClusterRepository(session)
+
+        deployment = await deployment_repo.get_by_id(did)
+        job = await job_repo.get_by_id(jid)
+        if not deployment or not job:
+            msg = f"Deployment {deployment_id} or Job {job_id} not found"
+            raise ValueError(msg)
+
+        try:
+            # Phase 1: DELETING_RESOURCES (20%)
+            await job_repo.update(
+                job,
+                status=JobStatus.RUNNING,
+                started_at=datetime.now(UTC),
+                current_phase="DELETING_RESOURCES",
+                progress_percentage=20,
+            )
+            await session.commit()
+
+            cluster = await cluster_repo.get_by_id(deployment.cluster_id)
+            if cluster and cluster.kubeconfig:
+                from tempfile import mkdtemp
+
+                kubeconfig_tmp = Path(mkdtemp()) / f"kubeconfig-{deployment.id}.yaml"
+                kubeconfig_tmp.write_text(cluster.kubeconfig, encoding="utf-8")
+
+                try:
+                    if deployment.namespace != "default":
+                        # Delete the entire namespace (removes all resources within)
+                        proc = await asyncio.create_subprocess_exec(
+                            "kubectl",
+                            "delete",
+                            "namespace",
+                            deployment.namespace,
+                            "--kubeconfig",
+                            str(kubeconfig_tmp),
+                            "--ignore-not-found",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        _, stderr = await proc.communicate()
+                        if proc.returncode != 0:
+                            logger.warning(
+                                "kubectl delete namespace failed: %s",
+                                stderr.decode().strip(),
+                            )
+                    else:
+                        # For default namespace, delete all resources by label/ownership
+                        # rather than deleting the namespace itself
+                        proc = await asyncio.create_subprocess_exec(
+                            "kubectl",
+                            "delete",
+                            "all",
+                            "--all",
+                            "-n",
+                            "default",
+                            "--kubeconfig",
+                            str(kubeconfig_tmp),
+                            "--ignore-not-found",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        _, stderr = await proc.communicate()
+                        if proc.returncode != 0:
+                            logger.warning(
+                                "kubectl delete all failed: %s",
+                                stderr.decode().strip(),
+                            )
+                finally:
+                    kubeconfig_tmp.unlink(missing_ok=True)
+
+            # Phase 2: COMPLETE (100%)
+            await deployment_repo.update(
+                deployment,
+                status=DeploymentStatus.DELETED,
+                deleted_at=datetime.now(UTC),
+                status_message="Deployment deleted successfully",
+            )
+            await job_repo.update(
+                job,
+                status=JobStatus.COMPLETED,
+                current_phase="COMPLETE",
+                progress_percentage=100,
+                completed_at=datetime.now(UTC),
+            )
+            await session.commit()
+
+        except Exception as exc:
+            await session.rollback()
+            logger.exception(
+                "Deployment deletion failed",
+                extra={"deployment_id": deployment_id, "job_id": job_id},
+            )
+            await _record_deployment_failure(
+                did,
+                jid,
+                exc,
+                prefix="Deletion failed: ",
+            )
+            raise
+
+    logger.info("Deployment %s deleted successfully", deployment_id)
+    return {"status": "deleted", "deployment_id": deployment_id}

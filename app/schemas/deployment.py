@@ -47,6 +47,14 @@ class DeploymentResponse(BaseModel):
     created_at: datetime.datetime
     updated_at: datetime.datetime
     completed_at: datetime.datetime | None
+    deleted_at: datetime.datetime | None = None
+
+
+class DeleteDeploymentResponse(BaseModel):
+    id: str
+    status: str
+    job_id: str
+    message: str
 
 
 class DeploymentListResponse(BaseModel):

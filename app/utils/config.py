@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # JWT
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRES_MINUTES: int = 30
+    JWT_ACCESS_TOKEN_EXPIRES_MINUTES: int = 120
     JWT_REFRESH_TOKEN_EXPIRES_DAYS: int = 7
     JWT_SECRET_KEY: str = "secret_key"  # noqa: S105
 

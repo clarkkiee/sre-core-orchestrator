@@ -290,6 +290,20 @@ async def _teardown_cluster(
             if await kind_client.cluster_exists(cluster.kind_name):
                 await kind_client.delete_cluster(cluster.kind_name)
 
+            # Soft-delete all active deployments on this cluster
+            from app.models.deployment import DeploymentStatus
+            from app.repositories.deployment import DeploymentRepository
+
+            deployment_repo = DeploymentRepository(session)
+            active_deployments = await deployment_repo.list_by_cluster(cid)
+            for dep in active_deployments:
+                await deployment_repo.update(
+                    dep,
+                    status=DeploymentStatus.DELETED,
+                    deleted_at=datetime.now(UTC),
+                    status_message="Deleted due to cluster teardown",
+                )
+
             await cluster_repo.update(
                 cluster,
                 status=ClusterStatus.DELETED,

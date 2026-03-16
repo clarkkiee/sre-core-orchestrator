@@ -1,20 +1,24 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.utils.config import settings
 
 
 def _make_session_maker() -> async_sessionmaker[AsyncSession]:
-    """Create a fresh async engine + session maker for each task invocation.
+    """Create a disposable async engine + session maker for a single task.
 
-    This avoids the 'Future attached to a different loop' error that occurs
-    when a module-level engine is reused across multiple ``asyncio.run()``
-    calls in Celery's forked worker processes.
+    Each call creates a fresh engine (with a small pool) so that forked
+    Celery workers never share an event-loop-bound engine.  The engine
+    is disposed automatically when the session context exits — see
+    ``_task_session()``.
     """
 
     task_engine = create_async_engine(
         settings.DATABASE_URL,
-        pool_size=settings.POSTGRES_POOL_SIZE,
-        max_overflow=settings.POSTGRES_MAX_OVERFLOW,
+        pool_size=2,
+        max_overflow=3,
         pool_timeout=settings.POSTGRES_POOL_TIMEOUT,
         echo=settings.LOG_LEVEL == "DEBUG",
         future=True,
@@ -27,3 +31,22 @@ def _make_session_maker() -> async_sessionmaker[AsyncSession]:
         autoflush=False,
         autocommit=False,
     )
+
+
+@asynccontextmanager
+async def task_session() -> AsyncIterator[AsyncSession]:
+    """Provide a session that automatically disposes its engine on exit.
+
+    Usage::
+
+        async with task_session() as session:
+            repo = SomeRepository(session)
+            ...
+    """
+    maker = _make_session_maker()
+    engine = maker.kw["bind"]
+    async with maker() as session:
+        try:
+            yield session
+        finally:
+            await engine.dispose()
