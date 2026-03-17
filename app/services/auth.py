@@ -21,7 +21,7 @@ class AuthService:
             msg = "User account is disabled"
             raise ForbiddenError(msg)
 
-        token = create_access_token(subject=str(user.id))
+        token = create_access_token(subject=str(user.id), is_admin=user.is_admin)
         return LoginResponse(access_token=token)
 
     async def register(self, payload: RegisterRequest) -> RegisterResponse:

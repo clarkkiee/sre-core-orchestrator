@@ -6,13 +6,14 @@ import jwt as pyjwt
 from app.utils.config import settings
 
 
-def create_access_token(subject: str) -> str:
-    expire = datetime.now(UTC) + timedelta(
-        minutes=settings.JWT_ACCESS_TOKEN_EXPIRES_MINUTES
-    )
+def create_access_token(subject: str, is_admin: bool) -> str:
+    now = datetime.now(UTC)
+    expire = now + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRES_MINUTES)
     payload = {
+        "iat": now,
         "exp": expire,
         "sub": subject,
+        "is_admin": is_admin,
     }
     encoded: str = pyjwt.encode(
         payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
