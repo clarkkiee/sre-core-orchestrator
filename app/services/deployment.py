@@ -7,10 +7,13 @@ from app.exceptions.errors import ConflictError, NotFoundError
 from app.models.cluster import ClusterStatus
 from app.models.deployment import Deployment, DeploymentStatus, DeployStrategy
 from app.models.job import Job, JobStatus, JobType
+from app.models.user import User
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.schemas.deployment import (
+    AdminDeploymentListResponse,
+    AdminDeploymentResponse,
     CreateDeploymentRequest,
     DeleteDeploymentResponse,
     DeploymentListResponse,
@@ -32,13 +35,17 @@ class DeploymentService:
 
     async def create_deployment(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         payload: CreateDeploymentRequest,
     ) -> DeploymentWithJobResponse:
-        # 1. Validate cluster exists, belongs to tenant, and is READY
+        # 1. Validate cluster exists, belongs to user (or user is admin), and is READY
+        tenant_id = user.id
         cluster_id = uuid.UUID(payload.cluster_id)
         cluster = await self.cluster_repository.get_by_id(cluster_id)
-        if not cluster or cluster.tenant_id != tenant_id:
+        if not cluster:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and cluster.tenant_id != tenant_id:
             msg = "Cluster not found"
             raise NotFoundError(msg)
         if cluster.status != ClusterStatus.READY:
@@ -90,22 +97,33 @@ class DeploymentService:
 
     async def get_deployment(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         deployment_id: uuid.UUID,
-    ) -> DeploymentResponse:
+    ) -> DeploymentResponse | AdminDeploymentResponse:
         deployment = await self.deployment_repository.get_by_id(deployment_id)
-        if not deployment or deployment.tenant_id != tenant_id:
+        if not deployment:
             msg = "Deployment not found"
             raise NotFoundError(msg)
+        if not user.is_admin and deployment.tenant_id != user.id:
+            msg = "Deployment not found"
+            raise NotFoundError(msg)
+        if user.is_admin:
+            return AdminDeploymentResponse(
+                **self._to_fields(deployment),
+                tenant_id=str(deployment.tenant_id),
+            )
         return DeploymentResponse(**self._to_fields(deployment))
 
     async def delete_deployment(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         deployment_id: uuid.UUID,
     ) -> DeleteDeploymentResponse:
         deployment = await self.deployment_repository.get_by_id(deployment_id)
-        if not deployment or deployment.tenant_id != tenant_id:
+        if not deployment:
+            msg = "Deployment not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and deployment.tenant_id != user.id:
             msg = "Deployment not found"
             raise NotFoundError(msg)
         if deployment.status in (DeploymentStatus.DELETING, DeploymentStatus.DELETED):
@@ -118,7 +136,7 @@ class DeploymentService:
         )
 
         job = Job(
-            tenant_id=tenant_id,
+            tenant_id=deployment.tenant_id,
             cluster_id=deployment.cluster_id,
             deployment_id=deployment.id,
             job_type=JobType.DELETE_DEPLOYMENT,
@@ -145,9 +163,22 @@ class DeploymentService:
 
     async def list_deployments(
         self,
-        tenant_id: uuid.UUID,
-    ) -> DeploymentListResponse:
-        deployments = await self.deployment_repository.list_by_tenant(tenant_id)
+        user: User,
+    ) -> DeploymentListResponse | AdminDeploymentListResponse:
+        if user.is_admin:
+            deployments = await self.deployment_repository.list_all()
+            admin_items = [
+                AdminDeploymentResponse(
+                    **self._to_fields(d),
+                    tenant_id=str(d.tenant_id),
+                )
+                for d in deployments
+            ]
+            return AdminDeploymentListResponse(
+                deployments=admin_items, total=len(admin_items)
+            )
+
+        deployments = await self.deployment_repository.list_by_tenant(user.id)
         items = [DeploymentResponse(**self._to_fields(d)) for d in deployments]
         return DeploymentListResponse(deployments=items, total=len(items))
 

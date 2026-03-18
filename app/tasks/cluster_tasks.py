@@ -198,7 +198,9 @@ async def _run_provisioning_phases(
         ksm_image=settings.KSM_IMAGE,
         vm_nodeport=settings.VM_NODEPORT,
     )
-    vm_url = await monitoring_deployer.deploy(kubeconfig_content, cp_ip)
+    vm_url = await monitoring_deployer.deploy(
+        kubeconfig_content, cp_ip, kind_name=cluster.kind_name
+    )
     await cluster_repo.update(cluster, victoriametrics_url=vm_url)
     await session.commit()
 

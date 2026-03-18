@@ -65,3 +65,12 @@ class DeploymentListResponse(BaseModel):
 class DeploymentWithJobResponse(DeploymentResponse):
     job_id: str | None = None
     job_status: str | None = None
+
+
+class AdminDeploymentResponse(DeploymentResponse):
+    tenant_id: str
+
+
+class AdminDeploymentListResponse(BaseModel):
+    deployments: list[AdminDeploymentResponse]
+    total: int

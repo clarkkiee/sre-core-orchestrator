@@ -50,6 +50,16 @@ class DeploymentRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_all(self) -> list[Deployment]:
+        """Return all deployments across all tenants (excludes soft-deleted)."""
+        stmt = (
+            select(Deployment)
+            .where(Deployment.deleted_at.is_(None))
+            .order_by(Deployment.created_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def update(self, deployment: Deployment, **fields: object) -> Deployment:
         for key, value in fields.items():
             setattr(deployment, key, value)

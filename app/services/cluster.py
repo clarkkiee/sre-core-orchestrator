@@ -8,6 +8,7 @@ from app.exceptions.errors import ConflictError, NotFoundError
 from app.infrastructure.kind import KindConfigBuilder
 from app.models.cluster import Cluster, ClusterStatus
 from app.models.job import Job, JobStatus, JobType
+from app.models.user import User
 from app.repositories.cluster import ClusterRepository
 from app.repositories.job import JobRepository
 from app.schemas.cluster import (
@@ -46,9 +47,10 @@ class ClusterService:
 
     async def create_cluster(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         payload: CreateClusterRequest,
     ) -> ClusterWithJobResponse:
+        tenant_id = user.id
         kind_name = self._generate_kind_name(tenant_id, payload.name)
 
         # Check for name collision
@@ -113,30 +115,54 @@ class ClusterService:
 
     async def get_cluster(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         cluster_id: uuid.UUID,
-    ) -> ClusterResponse:
+    ) -> ClusterResponse | AdminClusterResponse:
         cluster = await self.cluster_repository.get_by_id(cluster_id)
-        if not cluster or cluster.tenant_id != tenant_id:
+        if not cluster:
             msg = "Cluster not found"
             raise NotFoundError(msg)
+        if not user.is_admin and cluster.tenant_id != user.id:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if user.is_admin:
+            return AdminClusterResponse(
+                **self._to_fields(cluster),
+                tenant_id=str(cluster.tenant_id),
+            )
         return ClusterResponse(**self._to_fields(cluster))
 
     async def list_clusters(
         self,
-        tenant_id: uuid.UUID,
-    ) -> ClusterListResponse:
-        clusters = await self.cluster_repository.list_by_tenant(tenant_id)
+        user: User,
+    ) -> ClusterListResponse | AdminClusterListResponse:
+        if user.is_admin:
+            clusters = await self.cluster_repository.list_all()
+            admin_items = [
+                AdminClusterResponse(
+                    **self._to_fields(c),
+                    tenant_id=str(c.tenant_id),
+                )
+                for c in clusters
+            ]
+            return AdminClusterListResponse(
+                clusters=admin_items, total=len(admin_items)
+            )
+
+        clusters = await self.cluster_repository.list_by_tenant(user.id)
         items = [ClusterResponse(**self._to_fields(c)) for c in clusters]
         return ClusterListResponse(clusters=items, total=len(items))
 
     async def get_kubeconfig(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         cluster_id: uuid.UUID,
     ) -> str:
         cluster = await self.cluster_repository.get_by_id(cluster_id)
-        if not cluster or cluster.tenant_id != tenant_id:
+        if not cluster:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and cluster.tenant_id != user.id:
             msg = "Cluster not found"
             raise NotFoundError(msg)
         if not cluster.kubeconfig:
@@ -146,11 +172,14 @@ class ClusterService:
 
     async def delete_cluster(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         cluster_id: uuid.UUID,
     ) -> DeleteClusterResponse:
         cluster = await self.cluster_repository.get_by_id(cluster_id)
-        if not cluster or cluster.tenant_id != tenant_id:
+        if not cluster:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and cluster.tenant_id != user.id:
             msg = "Cluster not found"
             raise NotFoundError(msg)
         if cluster.status in (ClusterStatus.DELETING, ClusterStatus.DELETED):
@@ -163,7 +192,7 @@ class ClusterService:
         )
 
         job = Job(
-            tenant_id=tenant_id,
+            tenant_id=cluster.tenant_id,
             cluster_id=cluster.id,
             job_type=JobType.TEARDOWN_CLUSTER,
             status=JobStatus.PENDING,
@@ -189,12 +218,15 @@ class ClusterService:
 
     async def check_health(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         cluster_id: uuid.UUID,
     ) -> ClusterHealthResponse:
         """Check whether a cluster's Kubernetes API server is reachable."""
         cluster = await self.cluster_repository.get_by_id(cluster_id)
-        if not cluster or cluster.tenant_id != tenant_id:
+        if not cluster:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and cluster.tenant_id != user.id:
             msg = "Cluster not found"
             raise NotFoundError(msg)
 
@@ -276,35 +308,15 @@ class ClusterService:
 
     async def reconnect_cluster(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         cluster_id: uuid.UUID,
     ) -> ReconnectClusterResponse:
-        """Reconnect a cluster (tenant-scoped)."""
-        cluster = await self.cluster_repository.get_by_id(cluster_id)
-        if not cluster or cluster.tenant_id != tenant_id:
-            msg = "Cluster not found"
-            raise NotFoundError(msg)
-        return await self._dispatch_reconnect(cluster)
-
-    async def admin_list_clusters(self) -> AdminClusterListResponse:
-        """List all clusters across all tenants (admin only)."""
-        clusters = await self.cluster_repository.list_all()
-        items = [
-            AdminClusterResponse(
-                **self._to_fields(c),
-                tenant_id=str(c.tenant_id),
-            )
-            for c in clusters
-        ]
-        return AdminClusterListResponse(clusters=items, total=len(items))
-
-    async def admin_reconnect_cluster(
-        self,
-        cluster_id: uuid.UUID,
-    ) -> ReconnectClusterResponse:
-        """Reconnect any cluster regardless of tenant (admin only)."""
+        """Reconnect a cluster. Admins can reconnect any cluster."""
         cluster = await self.cluster_repository.get_by_id(cluster_id)
         if not cluster:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and cluster.tenant_id != user.id:
             msg = "Cluster not found"
             raise NotFoundError(msg)
         return await self._dispatch_reconnect(cluster)

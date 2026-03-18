@@ -24,6 +24,7 @@ REQUIRED_PORTS = [
     (443, "TCP", None),
     (30080, "TCP", "0.0.0.0"),  # noqa: S104
     (30443, "TCP", "0.0.0.0"),  # noqa: S104
+    (30090, "TCP", "0.0.0.0"),  # noqa: S104  # VictoriaMetrics
 ]
 
 

@@ -13,6 +13,8 @@ from app.exceptions.errors import (
     error_responses,
 )
 from app.schemas.cluster import (
+    AdminClusterListResponse,
+    AdminClusterResponse,
     ClusterHealthResponse,
     ClusterListResponse,
     ClusterResponse,
@@ -40,12 +42,12 @@ async def create_cluster(
     cluster_service: ClusterServiceDep,
 ) -> ClusterWithJobResponse:
     """Create a new KinD cluster (async via Celery)."""
-    return await cluster_service.create_cluster(current_user.id, payload)
+    return await cluster_service.create_cluster(current_user, payload)
 
 
 @router.get(
     "",
-    response_model=ClusterListResponse,
+    response_model=ClusterListResponse | AdminClusterListResponse,
     responses=error_responses(
         (UnauthorizedError, "Invalid or expired token"),
     ),
@@ -53,14 +55,14 @@ async def create_cluster(
 async def list_clusters(
     current_user: CurrentUser,
     cluster_service: ClusterServiceDep,
-) -> ClusterListResponse:
-    """List all clusters for the current user."""
-    return await cluster_service.list_clusters(current_user.id)
+) -> ClusterListResponse | AdminClusterListResponse:
+    """List clusters. Admins see all clusters; regular users see their own."""
+    return await cluster_service.list_clusters(current_user)
 
 
 @router.get(
     "/{cluster_id}",
-    response_model=ClusterResponse,
+    response_model=ClusterResponse | AdminClusterResponse,
     responses=error_responses(
         (UnauthorizedError, "Invalid or expired token"),
         (NotFoundError, "Cluster not found"),
@@ -70,9 +72,9 @@ async def get_cluster(
     cluster_id: uuid.UUID,
     current_user: CurrentUser,
     cluster_service: ClusterServiceDep,
-) -> ClusterResponse:
-    """Get a specific cluster's status and details."""
-    return await cluster_service.get_cluster(current_user.id, cluster_id)
+) -> ClusterResponse | AdminClusterResponse:
+    """Get a specific cluster. Admins can access any cluster."""
+    return await cluster_service.get_cluster(current_user, cluster_id)
 
 
 @router.delete(
@@ -90,8 +92,8 @@ async def delete_cluster(
     current_user: CurrentUser,
     cluster_service: ClusterServiceDep,
 ) -> DeleteClusterResponse:
-    """Delete a KinD cluster (async via Celery)."""
-    return await cluster_service.delete_cluster(current_user.id, cluster_id)
+    """Delete a KinD cluster (async via Celery). Admins can delete any cluster."""
+    return await cluster_service.delete_cluster(current_user, cluster_id)
 
 
 @router.post(
@@ -109,8 +111,8 @@ async def reconnect_cluster(
     current_user: CurrentUser,
     cluster_service: ClusterServiceDep,
 ) -> ReconnectClusterResponse:
-    """Reconnect a KinD cluster whose network may have changed (async via Celery)."""
-    return await cluster_service.reconnect_cluster(current_user.id, cluster_id)
+    """Reconnect a KinD cluster (async via Celery). Admins can reconnect any cluster."""
+    return await cluster_service.reconnect_cluster(current_user, cluster_id)
 
 
 @router.get(
@@ -127,7 +129,7 @@ async def check_cluster_health(
     cluster_service: ClusterServiceDep,
 ) -> ClusterHealthResponse:
     """Check whether a cluster's Kubernetes API server is reachable."""
-    return await cluster_service.check_health(current_user.id, cluster_id)
+    return await cluster_service.check_health(current_user, cluster_id)
 
 
 @router.get(
@@ -143,7 +145,7 @@ async def download_kubeconfig(
     cluster_service: ClusterServiceDep,
 ) -> Response:
     """Download the kubeconfig YAML for a cluster."""
-    content = await cluster_service.get_kubeconfig(current_user.id, cluster_id)
+    content = await cluster_service.get_kubeconfig(current_user, cluster_id)
     return Response(
         content=content,
         media_type="application/x-yaml",

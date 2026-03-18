@@ -12,6 +12,8 @@ from app.exceptions.errors import (
     error_responses,
 )
 from app.schemas.deployment import (
+    AdminDeploymentListResponse,
+    AdminDeploymentResponse,
     CreateDeploymentRequest,
     DeleteDeploymentResponse,
     DeploymentListResponse,
@@ -38,12 +40,12 @@ async def create_deployment(
     deployment_service: DeploymentServiceDep,
 ) -> DeploymentWithJobResponse:
     """Deploy an application to a cluster (async via Celery)."""
-    return await deployment_service.create_deployment(current_user.id, payload)
+    return await deployment_service.create_deployment(current_user, payload)
 
 
 @router.get(
     "",
-    response_model=DeploymentListResponse,
+    response_model=DeploymentListResponse | AdminDeploymentListResponse,
     responses=error_responses(
         (UnauthorizedError, "Invalid or expired token"),
     ),
@@ -51,14 +53,14 @@ async def create_deployment(
 async def list_deployments(
     current_user: CurrentUser,
     deployment_service: DeploymentServiceDep,
-) -> DeploymentListResponse:
-    """List all deployments for the current user."""
-    return await deployment_service.list_deployments(current_user.id)
+) -> DeploymentListResponse | AdminDeploymentListResponse:
+    """List deployments. Admins see all deployments; regular users see their own."""
+    return await deployment_service.list_deployments(current_user)
 
 
 @router.get(
     "/{deployment_id}",
-    response_model=DeploymentResponse,
+    response_model=DeploymentResponse | AdminDeploymentResponse,
     responses=error_responses(
         (UnauthorizedError, "Invalid or expired token"),
         (NotFoundError, "Deployment not found"),
@@ -68,9 +70,9 @@ async def get_deployment(
     deployment_id: uuid.UUID,
     current_user: CurrentUser,
     deployment_service: DeploymentServiceDep,
-) -> DeploymentResponse:
-    """Get a specific deployment's status and details."""
-    return await deployment_service.get_deployment(current_user.id, deployment_id)
+) -> DeploymentResponse | AdminDeploymentResponse:
+    """Get a specific deployment. Admins can access any deployment."""
+    return await deployment_service.get_deployment(current_user, deployment_id)
 
 
 @router.delete(
@@ -88,5 +90,5 @@ async def delete_deployment(
     current_user: CurrentUser,
     deployment_service: DeploymentServiceDep,
 ) -> DeleteDeploymentResponse:
-    """Delete a deployment and clean up its K8s resources (async via Celery)."""
-    return await deployment_service.delete_deployment(current_user.id, deployment_id)
+    """Delete a deployment (async via Celery). Admins can delete any deployment."""
+    return await deployment_service.delete_deployment(current_user, deployment_id)
