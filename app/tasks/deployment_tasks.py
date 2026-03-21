@@ -112,6 +112,7 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
     from app.infrastructure.deployers.factory import DeployerFactory
     from app.infrastructure.git import GitClient
     from app.infrastructure.kubernetes import ClusterHealthChecker
+    from app.infrastructure.servicemesh.manager import LinkerdManager
     from app.models.cluster import ClusterStatus
     from app.models.deployment import DeploymentStatus, DeployStrategy
     from app.repositories.cluster import ClusterRepository
@@ -240,17 +241,33 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
 
         deploy_output = await deployer.deploy()
 
-        # Phase 4: VERIFYING (80%)
+        # Phase 4: VERIFYING (70%)
         await job_repo.update(
             job,
             current_phase="VERIFYING",
-            progress_percentage=80,
+            progress_percentage=70,
         )
         await session.commit()
 
         await deployer.verify()
 
-        # Phase 5: COMPLETE (100%)
+        # Phase 5: INJECT SERVICE MESH (80%)
+        await job_repo.update(
+            job, current_phase="LINKERD_INJECTION", progress_percentage=80
+        )
+        await session.commit()
+
+        linkerd_manager = LinkerdManager(
+            gateway_api_version=settings.GATEWAY_API_VERSION,
+            kubectl_binary=settings.KUBECTL_BINARY,
+            linkerd_binary=settings.LINKERD_BINARY,
+        )
+
+        await linkerd_manager.inject_namespaces(
+            kubeconfig_path=str(kubeconfig_tmp), namespaces=[deployment.namespace]
+        )
+
+        # Phase 6: COMPLETE (100%)
         await deployment_repo.update(
             deployment,
             status=DeploymentStatus.COMPLETED,

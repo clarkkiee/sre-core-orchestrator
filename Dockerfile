@@ -44,7 +44,7 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/s
 RUN curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64" && \
     chmod +x /usr/local/bin/kind
 
-# Deployment tools: helm, skaffold, kustomize
+# Deployment tools: helm, skaffold, kustomize, linkerd
 RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 RUN curl -Lo /usr/local/bin/skaffold "https://storage.googleapis.com/skaffold/releases/latest/skaffold-linux-amd64" && \
@@ -52,6 +52,10 @@ RUN curl -Lo /usr/local/bin/skaffold "https://storage.googleapis.com/skaffold/re
 
 RUN curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash && \
     mv kustomize /usr/local/bin/
+
+RUN curl -fsL https://run.linkerd.io/install | sh && \
+    mv /root/.linkerd2/bin/linkerd /usr/local/bin/linkerd && \
+    chmod +x /usr/local/bin/linkerd
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH" \
@@ -98,7 +102,7 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/s
 RUN curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64" && \
     chmod +x /usr/local/bin/kind
 
-# Deployment tools: helm, skaffold, kustomize
+# Deployment tools: helm, skaffold, kustomize, linkerd
 RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 RUN curl -Lo /usr/local/bin/skaffold "https://storage.googleapis.com/skaffold/releases/latest/skaffold-linux-amd64" && \
@@ -106,6 +110,10 @@ RUN curl -Lo /usr/local/bin/skaffold "https://storage.googleapis.com/skaffold/re
 
 RUN curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash && \
     mv kustomize /usr/local/bin/
+
+RUN curl -fsL https://run.linkerd.io/install | sh && \
+    mv /root/.linkerd2/bin/linkerd /usr/local/bin/linkerd && \
+    chmod +x /usr/local/bin/linkerd
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH" \

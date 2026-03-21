@@ -9,6 +9,7 @@ from app.infrastructure.kind import KindClient, KindCommandError
 from app.infrastructure.kind.config_builder import KindConfigBuilder
 from app.infrastructure.kubernetes import KubernetesVerifier
 from app.infrastructure.metrics.deployer import MonitoringStackDeployer
+from app.infrastructure.servicemesh.manager import LinkerdManager
 from app.models.cluster import ClusterStatus
 from app.models.job import JobStatus
 from app.repositories.cluster import ClusterRepository
@@ -185,11 +186,11 @@ async def _run_provisioning_phases(
 
     await verifier.verify_cluster_ready(kubeconfig_content)
 
-    # Phase 5: DEPLOYING_MONITORING (80%)
+    # Phase 5: DEPLOYING_MONITORING (70%)
     await job_repo.update(
         job,
         current_phase="DEPLOYING_MONITORING",
-        progress_percentage=80,
+        progress_percentage=70,
     )
     await session.commit()
 
@@ -203,6 +204,22 @@ async def _run_provisioning_phases(
     )
     await cluster_repo.update(cluster, victoriametrics_url=vm_url)
     await session.commit()
+
+    # Phase 6: DEPLOYING SERVICE MESH (LINKERD) (80%)
+    await job_repo.update(
+        job,
+        current_phase="DEPLOYING_LINKERD",
+        progress_percentage=80,
+    )
+    await session.commit()
+
+    linkerd_manager = LinkerdManager(
+        gateway_api_version=settings.GATEWAY_API_VERSION,
+        kubectl_binary=settings.KUBECTL_BINARY,
+        linkerd_binary=settings.LINKERD_BINARY,
+    )
+
+    await linkerd_manager.deploy(kubeconfig_content=kubeconfig_content)
 
     # Phase 6: COMPLETE (100%)
     await cluster_repo.update(
