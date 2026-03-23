@@ -211,6 +211,28 @@ scrape_configs:
       - action: labelmap
         regex: __meta_kubernetes_node_label_(.+)
     metrics_path: /metrics/cadvisor
+
+  - job_name: "linkerd-proxy"
+    kubernetes_sd_configs:
+        - role: pod
+    relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_container_name]
+          action: keep
+          regex: linkerd-proxy
+        - source_labels: [__meta_kubernetes_pod_ip]
+          action: replace
+          target_label: __address__
+          regex: (.+)
+          replacement: "${1}:4191"
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: pod
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          action: replace
+          target_label: deployment
 """
 
 

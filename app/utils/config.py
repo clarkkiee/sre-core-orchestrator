@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     CLUSTER_DEFAULT_TTL_DAYS: int = 7
     PRIVATE_REGISTRY_URL: str | None = None
 
+    # Service Mesh / Linkerd
+    LINKERD_BINARY: str = "/usr/local/bin/linkerd"
+    GATEWAY_API_VERSION: str = "v1.4.0"
+    LINKERD_INJECT_NAMESPACES: list[str] = ["default"]
+
     # Monitoring stack images
     VM_IMAGE: str = "victoriametrics/victoria-metrics:v1.108.1"
     KSM_IMAGE: str = "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0"
