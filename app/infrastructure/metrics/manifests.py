@@ -224,6 +224,15 @@ scrape_configs:
           target_label: __address__
           regex: (.+)
           replacement: "${1}:4191"
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: pod
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          action: replace
+          target_label: deployment
 """
 
 
