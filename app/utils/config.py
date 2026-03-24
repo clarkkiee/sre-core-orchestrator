@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # Deployment / Git settings
     GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108
 
+    # LitmusChaos
+    LITMUS_VERSION: str = "3.9.0"
+
     @property
     def DATABASE_URL(self) -> str:  # noqa: N802
         """Construct async database URL."""
