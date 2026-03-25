@@ -21,7 +21,7 @@ from app.infrastructure.chaos.manifests import (
 
 logger = logging.getLogger(__name__)
 
-_LITMUS_NS = "litmus-chaos"
+_LITMUS_NS = "litmus"
 _LITMUS_CRD_GROUP = "litmuschaos.io"
 _LITMUS_CRD_VERSION = "v1alpha1"
 _POLL_INTERVAL = 5
@@ -197,7 +197,7 @@ class LitmusChaosManager:
         finally:
             await api_client.close()
 
-    async def setup_experiment_rbac(
+    async def setup_experiment_rbac(  # noqa: PLR0912
         self, kubeconfig_content: str, namespace: str
     ) -> None:
         api_client = await self._build_api_client(kubeconfig_content)
@@ -207,7 +207,6 @@ class LitmusChaosManager:
             custom = client.CustomObjectsApi(api_client)
             rbac_manifests = build_namespaced_litmuschaos_rbac(namespace=namespace)
 
-            # Apply SA
             sa = rbac_manifests[0]
             try:
                 await v1.create_namespaced_service_account(namespace=namespace, body=sa)
@@ -215,25 +214,35 @@ class LitmusChaosManager:
                 if e.status != _HTTP_CONFLICT:
                     raise
 
-            # Apply Role
+            # Apply Role (create or replace)
             role = rbac_manifests[1]
             try:
                 await rbac_v1.create_namespaced_role(namespace=namespace, body=role)
             except ApiException as e:
-                if e.status != _HTTP_CONFLICT:
+                if e.status == _HTTP_CONFLICT:
+                    await rbac_v1.replace_namespaced_role(
+                        name=role["metadata"]["name"], namespace=namespace, body=role
+                    )
+                else:
                     raise
 
-            # Apply RoleBinding
+            # Apply RoleBinding (create or replace)
             role_binding = rbac_manifests[2]
             try:
                 await rbac_v1.create_namespaced_role_binding(
                     namespace=namespace, body=role_binding
                 )
             except ApiException as e:
-                if e.status != _HTTP_CONFLICT:
+                if e.status == _HTTP_CONFLICT:
+                    await rbac_v1.replace_namespaced_role_binding(
+                        name=role_binding["metadata"]["name"],
+                        namespace=namespace,
+                        body=role_binding,
+                    )
+                else:
                     raise
 
-            # Apply ChaosExperiment templates for every fault type
+            # Apply ChaosExperiment templates (create or patch)
             for exp_type in EXPERIMENT_TEMPLATES:
                 body = build_chaos_experiment(
                     experiment_type=exp_type, namespace=namespace
@@ -247,11 +256,19 @@ class LitmusChaosManager:
                         plural="chaosexperiments",
                     )
                 except ApiException as e:
-                    if e.status != _HTTP_CONFLICT:
+                    if e.status == _HTTP_CONFLICT:
+                        await custom.patch_namespaced_custom_object(
+                            group=_LITMUS_CRD_GROUP,
+                            version=_LITMUS_CRD_VERSION,
+                            namespace=namespace,
+                            plural="chaosexperiments",
+                            name=exp_type,
+                            body=body,
+                        )
+                    else:
                         raise
-                logger.info(
-                    "Litmus RBAC + experiment templated ready in in ns=%s", namespace
-                )
+
+            logger.info("Litmus RBAC + experiment templates ready in ns=%s", namespace)
         finally:
             await api_client.close()
 
@@ -321,12 +338,11 @@ class LitmusChaosManager:
 
                     if verdict and verdict != "Awaited":
                         logger.info("ChaosResult %s verdict=%s", result_name, verdict)
+                        return result
 
                 except ApiException as e:
                     if e.status != _HTTP_NOT_FOUND:
                         raise
-                else:
-                    return result
 
                 await asyncio.sleep(_POLL_INTERVAL)
                 elapsed += _POLL_INTERVAL

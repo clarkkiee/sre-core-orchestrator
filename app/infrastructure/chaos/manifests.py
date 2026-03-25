@@ -2,7 +2,7 @@
 
 from typing import Any
 
-_LITMUSCHAOS_NS = "litmus-chaos"
+_LITMUSCHAOS_NS = "litmus"
 
 _LITMUS_IMAGE = "litmuschaos/go-runner:3.9.0"
 
@@ -237,6 +237,11 @@ def build_chaos_experiment(experiment_type: str, namespace: str) -> dict[str, An
                 "command": ["/bin/bash"],
                 "args": ["-c", template["args"]],
                 "env": env_list,
+                "labels": {
+                    "name": experiment_type,
+                    "app.kubernetes.io/part-of": "litmus",
+                    "app.kubernetes.io/component": "experiment-job",
+                },
             }
         },
     }

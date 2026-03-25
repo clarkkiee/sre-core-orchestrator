@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.session import close_db, init_db
 from app.routers.auth import router as auth_router
+from app.routers.chaos import router as chaos_router
 from app.routers.clusters import router as clusters_router
 from app.routers.deployments import router as deployments_router
 from app.routers.observability import router as observability_router
@@ -46,6 +47,7 @@ api_router.include_router(users_router)
 api_router.include_router(clusters_router)
 api_router.include_router(deployments_router)
 api_router.include_router(observability_router)
+api_router.include_router(chaos_router)
 
 
 @api_router.get("/health")

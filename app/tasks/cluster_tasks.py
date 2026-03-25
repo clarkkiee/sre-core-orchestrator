@@ -5,14 +5,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.infrastructure.chaos.manager import LitmusChaosManager
 from app.infrastructure.kind import KindClient, KindCommandError
 from app.infrastructure.kind.config_builder import KindConfigBuilder
 from app.infrastructure.kubernetes import KubernetesVerifier
 from app.infrastructure.metrics.deployer import MonitoringStackDeployer
 from app.infrastructure.servicemesh.manager import LinkerdManager
 from app.models.cluster import ClusterStatus
+from app.models.deployment import DeploymentStatus
 from app.models.job import JobStatus
 from app.repositories.cluster import ClusterRepository
+from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
 from app.tasks.shared import _make_session_maker
@@ -221,6 +224,20 @@ async def _run_provisioning_phases(
 
     await linkerd_manager.deploy(kubeconfig_content=kubeconfig_content)
 
+    # Phase 7: DEPLOYING_LITMUS (85%)
+    await job_repo.update(
+        job,
+        current_phase="DEPLOYING_LITMUS",
+        progress_percentage=85,
+    )
+    await session.commit()
+
+    litmus_manager = LitmusChaosManager(
+        kubectl_binary=settings.KUBECTL_BINARY, litmus_version=settings.LITMUS_VERSION
+    )
+
+    await litmus_manager.deploy(kubeconfig_content=kubeconfig_content)
+
     # Phase 6: COMPLETE (100%)
     await cluster_repo.update(
         cluster,
@@ -310,9 +327,6 @@ async def _teardown_cluster(
                 await kind_client.delete_cluster(cluster.kind_name)
 
             # Soft-delete all active deployments on this cluster
-            from app.models.deployment import DeploymentStatus
-            from app.repositories.deployment import DeploymentRepository
-
             deployment_repo = DeploymentRepository(session)
             active_deployments = await deployment_repo.list_by_cluster(cid)
             for dep in active_deployments:
