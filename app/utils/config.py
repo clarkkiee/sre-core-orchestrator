@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     VM_IMAGE: str = "victoriametrics/victoria-metrics:v1.108.1"
     KSM_IMAGE: str = "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0"
     VM_NODEPORT: int = 30090
+    BLACKBOX_IMAGE: str = "prom/blackbox-exporter:v0.25.0"
 
     # Deployment / Git settings
     GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108

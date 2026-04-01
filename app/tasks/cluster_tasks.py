@@ -201,6 +201,7 @@ async def _run_provisioning_phases(
         vm_image=settings.VM_IMAGE,
         ksm_image=settings.KSM_IMAGE,
         vm_nodeport=settings.VM_NODEPORT,
+        bbe_image=settings.BLACKBOX_IMAGE,
     )
     vm_url = await monitoring_deployer.deploy(
         kubeconfig_content, cp_ip, kind_name=cluster.kind_name

@@ -257,7 +257,17 @@ class LitmusChaosManager:
                     )
                 except ApiException as e:
                     if e.status == _HTTP_CONFLICT:
-                        await custom.patch_namespaced_custom_object(
+                        existing = await custom.get_namespaced_custom_object(
+                            group=_LITMUS_CRD_GROUP,
+                            version=_LITMUS_CRD_VERSION,
+                            namespace=namespace,
+                            plural="chaosexperiments",
+                            name=exp_type,
+                        )
+                        body["metadata"]["resourceVersion"] = existing["metadata"][
+                            "resourceVersion"
+                        ]
+                        await custom.replace_namespaced_custom_object(
                             group=_LITMUS_CRD_GROUP,
                             version=_LITMUS_CRD_VERSION,
                             namespace=namespace,

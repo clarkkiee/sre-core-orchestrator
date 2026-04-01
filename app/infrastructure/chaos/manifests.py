@@ -19,15 +19,17 @@ _LITMUS_IMAGE = "litmuschaos/go-runner:3.9.0"
 #
 # Sources: https://hub.litmuschaos.io/api/chaos/master?file=faults/kubernetes/<name>/fault.yaml
 # ---------------------------------------------------------------------------
+
+
 EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
     "pod-delete": {
         "args": "./experiments -name pod-delete",
         "env": {
-            "TOTAL_CHAOS_DURATION": "15",  # seconds — how long to keep deleting
-            "CHAOS_INTERVAL": "5",  # seconds between each deletion
-            "FORCE": "true",  # forceful (true) vs graceful (false)
-            "PODS_AFFECTED_PERC": "0",  # 0 = one pod; >0 = percentage of matching pods
-            "SEQUENCE": "parallel",  # parallel | serial
+            "TOTAL_CHAOS_DURATION": "15",
+            "CHAOS_INTERVAL": "5",
+            "FORCE": "true",
+            "PODS_AFFECTED_PERC": "0",
+            "SEQUENCE": "parallel",
         },
     },
     "pod-cpu-hog": {
@@ -58,8 +60,8 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
         "args": "./experiments -name pod-network-latency",
         "env": {
             "TOTAL_CHAOS_DURATION": "60",
-            "NETWORK_LATENCY": "2000",  # ms of added latency
-            "JITTER": "0",  # ms of random jitter on top of latency
+            "NETWORK_LATENCY": "2000",
+            "JITTER": "0",
             "NETWORK_INTERFACE": "eth0",
             "PODS_AFFECTED_PERC": "0",
             "SEQUENCE": "parallel",
@@ -212,6 +214,14 @@ def build_namespaced_litmuschaos_rbac(namespace: str) -> list[dict[str, Any]]:
     return [sa, role, role_binding]
 
 
+_NEEDS_RUNTIME_SOCKET = {
+    "pod-cpu-hog",
+    "pod-memory-hog",
+    "pod-network-latency",
+    "pod-network-loss",
+}
+
+
 def build_chaos_experiment(experiment_type: str, namespace: str) -> dict[str, Any]:
     """Return a ChaosExperiment CR for the given fault type in the target namespace.
 
@@ -219,6 +229,40 @@ def build_chaos_experiment(experiment_type: str, namespace: str) -> dict[str, An
     """
     template = EXPERIMENT_TEMPLATES[experiment_type]
     env_list = [{"name": k, "value": v} for k, v in template["env"].items()]
+
+    definition: dict[str, Any] = {
+        "scope": "Namespaced",
+        "image": _LITMUS_IMAGE,
+        "command": ["/bin/bash"],
+        "args": ["-c", template["args"]],
+        "env": env_list,
+        "labels": {
+            "name": experiment_type,
+            "app.kubernetes.io/part-of": "litmus",
+            "app.kubernetes.io/component": "experiment-job",
+        },
+    }
+
+    if experiment_type in _NEEDS_RUNTIME_SOCKET:
+        definition["hostPID"] = True
+        definition["permissions"] = [
+            {
+                "apiGroups": [""],
+                "resources": ["pods"],
+                "verbs": ["get", "list", "delete", "deletecollection"],
+            },
+        ]
+        definition["securityContext"] = {
+            "podSecurityContext": {
+                "runAsUser": 0,
+                "runAsGroup": 0,
+            },
+            "containerSecurityContext": {
+                "privileged": True,
+                "allowPrivilegeEscalation": True,
+            },
+        }
+
     return {
         "apiVersion": "litmuschaos.io/v1alpha1",
         "kind": "ChaosExperiment",
@@ -231,20 +275,18 @@ def build_chaos_experiment(experiment_type: str, namespace: str) -> dict[str, An
             },
         },
         "spec": {
-            "definition": {
-                "scope": "Namespaced",
-                "image": _LITMUS_IMAGE,
-                "command": ["/bin/bash"],
-                "args": ["-c", template["args"]],
-                "env": env_list,
-                "labels": {
-                    "name": experiment_type,
-                    "app.kubernetes.io/part-of": "litmus",
-                    "app.kubernetes.io/component": "experiment-job",
-                },
-            }
+            "definition": definition,
         },
     }
+
+
+def _build_engine_env(experiment_type: str, duration: int) -> list[dict[str, str]]:
+    """Build the full env list for a ChaosEngine experiment, merging template defaults
+    with the user-provided duration override."""
+    template = EXPERIMENT_TEMPLATES[experiment_type]
+    env = dict(template["env"])
+    env["TOTAL_CHAOS_DURATION"] = str(duration)
+    return [{"name": k, "value": v} for k, v in env.items()]
 
 
 def build_chaos_engine(
@@ -278,17 +320,22 @@ def build_chaos_engine(
             },
             "engineState": "active",
             "chaosServiceAccount": "litmus-runner",
+            "components": {
+                "runner": {
+                    "runnerAnnotation": {
+                        "linkerd.io/inject": "disabled",
+                    },
+                },
+            },
             "experiments": [
                 {
                     "name": experiment_type,
                     "spec": {
                         "components": {
-                            "env": [
-                                {
-                                    "name": "TOTAL_CHAOS_DURATION",
-                                    "value": str(duration),
-                                },
-                            ]
+                            "env": _build_engine_env(experiment_type, duration),
+                            "experimentAnnotations": {
+                                "linkerd.io/inject": "disabled",
+                            },
                         }
                     },
                 }
