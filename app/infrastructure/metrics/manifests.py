@@ -7,6 +7,8 @@ _KSM_LABEL = "kube-state-metrics"
 _VM_LABEL = "victoria-metrics"
 _KSM_PORT = 8080
 _VM_PORT = 8428
+_BBE_LABEL = "blackbox-exporter"
+_BBE_PORT = 9115
 
 
 def build_monitoring_namespace() -> dict[str, Any]:
@@ -233,6 +235,49 @@ scrape_configs:
         - source_labels: [__meta_kubernetes_pod_label_app]
           action: replace
           target_label: deployment
+
+  - job_name: "blackbox-http"
+    metrics_path: /probe
+    params:
+        module: [http_2xx]
+    kubernetes_sd_configs:
+        - role: service
+    relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace]
+          action: drop
+          regex: "kube-system|monitoring|litmus|linkerd.*"
+        - source_labels: [__address__]
+          target_label: __param_target
+        - target_label: __address__
+          replacement: "blackbox-exporter.monitoring.svc.cluster.local:9115"
+        - source_labels: [__param_target]
+          target_label: instance
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_service_name]
+          target_label: service
+
+  - job_name: "blackbox-tcp"
+    metrics_path: /probe
+    params:
+        module: [tcp_connect]
+    kubernetes_sd_configs:
+        - role: service
+    relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace]
+          action: drop
+          regex: "kube-system|monitoring|litmus|linkerd.*"
+        - source_labels: [__address__]
+          target_label: __param_target
+        - target_label: __address__
+          replacement: "blackbox-exporter.monitoring.svc.cluster.local:9115"
+        - source_labels: [__param_target]
+          target_label: instance
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_service_name]
+          target_label: service
+
 """
 
 
@@ -407,3 +452,114 @@ def build_victoria_metrics(
     }
 
     return [sa, cluster_role, crb, configmap, deployment, service]
+
+
+# -- Blackbox exporter ----------------------------------------------------------
+def build_blackbox_exporter(image: str) -> list[dict[str, Any]]:
+    """Return all manifests needed for the Prometheus Blackbox exporter"""
+
+    configmap: dict[str, Any] = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": _BBE_LABEL,
+            "namespace": _MONITORING_NS,
+        },
+        "data": {
+            "blackbox.yml": """\
+modules:
+    http_2xx:
+        prober: http
+        timeout: 5s
+        http:
+            preferred_ip_protocol: ip4
+            valid_http_versions:
+                - HTTP/1.1
+                - HTTP/2.0
+            follow_redirects: true
+    tcp_connect:
+        prober: tcp
+        timeout: 5s
+"""
+        },
+    }
+
+    deployment: dict[str, Any] = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": _BBE_LABEL,
+            "namespace": _MONITORING_NS,
+            "labels": {"app": _BBE_LABEL},
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": {"app": _BBE_LABEL}},
+            "template": {
+                "metadata": {"labels": {"app": _BBE_LABEL}},
+                "spec": {
+                    "containers": [
+                        {
+                            "name": _BBE_LABEL,
+                            "image": image,
+                            "args": ["--config.file=/config/blackbox.yml"],
+                            "ports": [
+                                {
+                                    "containerPort": _BBE_PORT,
+                                    "name": "http-probe",
+                                }
+                            ],
+                            "readinessProbe": {
+                                "httpGet": {
+                                    "path": "/-/healthy",
+                                    "port": _BBE_PORT,
+                                }
+                            },
+                            "volumeMounts": [
+                                {
+                                    "name": "config",
+                                    "mountPath": "/config",
+                                    "readOnly": True,
+                                }
+                            ],
+                            "resources": {
+                                "requests": {
+                                    "cpu": "25m",
+                                    "memory": "32Mi",
+                                },
+                                "limits": {
+                                    "cpu": "50m",
+                                    "memory": "64Mi",
+                                },
+                            },
+                        }
+                    ],
+                    "volumes": [
+                        {
+                            "name": "config",
+                            "configMap": {"name": _BBE_LABEL},
+                        },
+                    ],
+                },
+            },
+        },
+    }
+
+    service: dict[str, Any] = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": _BBE_LABEL,
+            "namespace": _MONITORING_NS,
+            "labels": {"app": _BBE_LABEL},
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {"app": _BBE_LABEL},
+            "ports": [
+                {"port": _BBE_PORT, "targetPort": _BBE_PORT, "name": "http-probe"}
+            ],
+        },
+    }
+
+    return [configmap, deployment, service]

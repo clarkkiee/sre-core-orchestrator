@@ -7,7 +7,11 @@ class Base(DeclarativeBase):
     """Base class for all database models."""
 
 
-# Import all models here for Alembic to detect them
+from app.models.chaos import (  # noqa: E402
+    ChaosExperiment,
+    ChaosExperimentStatus,
+    ExperimentType,
+)
 from app.models.cluster import Cluster  # noqa: E402
 from app.models.deployment import (  # noqa: E402
     Deployment,
@@ -24,10 +28,13 @@ from app.models.user import User  # noqa: E402
 
 __all__ = [
     "Base",
+    "ChaosExperiment",
+    "ChaosExperimentStatus",
     "Cluster",
     "DeployStrategy",
     "Deployment",
     "DeploymentStatus",
+    "ExperimentType",
     "Job",
     "JobStatus",
     "JobType",

@@ -11,12 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.exceptions.errors import ForbiddenError, UnauthorizedError
 from app.models.user import User
+from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.repositories.observability import ObservabilityRepository
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
+from app.services.chaos import ChaosService
 from app.services.cluster import ClusterService
 from app.services.deployment import DeploymentService
 from app.services.observability import ObservabilityService
@@ -171,3 +173,29 @@ def get_observability_service(
 ObservabilityServiceDep = Annotated[
     ObservabilityService, Depends(get_observability_service)
 ]
+
+
+# Chaos Repository
+def get_chaos_repository(db: DbSession) -> ChaosRepository:
+    return ChaosRepository(db)
+
+
+ChaosRepositoryDep = Annotated[ChaosRepository, Depends(get_chaos_repository)]
+
+
+# Chaos Service
+def get_chaos_service(
+    chaos_repository: ChaosRepositoryDep,
+    cluster_repository: ClusterRepositoryDep,
+    deployment_repository: DeploymentRepositoryDep,
+    job_repository: JobRepositoryDep,
+) -> ChaosService:
+    return ChaosService(
+        chaos_repository=chaos_repository,
+        cluster_repository=cluster_repository,
+        deployment_repository=deployment_repository,
+        job_repository=job_repository,
+    )
+
+
+ChaosServiceDep = Annotated[ChaosService, Depends(get_chaos_service)]

@@ -11,6 +11,7 @@ from kubernetes_asyncio.client import ApiClient, Configuration
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from app.infrastructure.metrics.manifests import (
+    build_blackbox_exporter,
     build_kube_state_metrics,
     build_monitoring_namespace,
     build_victoria_metrics,
@@ -36,14 +37,12 @@ class MonitoringStackDeployer:
     """Deploys VictoriaMetrics + kube-state-metrics into a cluster."""
 
     def __init__(
-        self,
-        vm_image: str,
-        ksm_image: str,
-        vm_nodeport: int,
+        self, vm_image: str, ksm_image: str, vm_nodeport: int, bbe_image: str
     ) -> None:
         self._vm_image = vm_image
         self._ksm_image = ksm_image
         self._vm_nodeport = vm_nodeport
+        self._bbe_image = bbe_image
 
     async def deploy(
         self,
@@ -61,12 +60,17 @@ class MonitoringStackDeployer:
         try:
             await self._apply_namespace(api_client)
             await self._apply_kube_state_metrics(api_client)
+            await self._apply_blackbox_exporter(api_client)
             await self._apply_victoria_metrics(api_client)
 
             logger.info("Waiting for monitoring pods to become ready")
             await self._wait_for_ready(
                 api_client,
                 label_selector="app=kube-state-metrics",
+            )
+            await self._wait_for_ready(
+                api_client,
+                label_selector="app=blackbox-exporter",
             )
             await self._wait_for_ready(
                 api_client,
@@ -99,6 +103,15 @@ class MonitoringStackDeployer:
                 logger.info("Namespace %s already exists", _MONITORING_NS)
             else:
                 raise
+
+    async def _apply_blackbox_exporter(
+        self,
+        api_client: ApiClient,
+    ) -> None:
+        manifests = build_blackbox_exporter(self._bbe_image)
+        for m in manifests:
+            await self._apply_manifest(api_client, m)
+        logger.info("prometheus-blackbox-exporter manifests applied")
 
     async def _apply_kube_state_metrics(
         self,

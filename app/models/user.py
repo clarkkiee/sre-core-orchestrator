@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.chaos import ChaosExperiment
     from app.models.cluster import Cluster
     from app.models.deployment import Deployment
     from app.models.job import Job
@@ -77,6 +78,10 @@ class User(Base):
         "Deployment",
         back_populates="tenant",
         cascade="all, delete-orphan",
+    )
+
+    chaos_experiments: Mapped[list["ChaosExperiment"]] = relationship(
+        "ChaosExperiment", back_populates="tenant", cascade="all, delete-orphan"
     )
 
     @property
