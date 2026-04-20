@@ -33,16 +33,15 @@ class SkaffoldDeployer(BaseDeployer):
         return await self._run_command(*cmd)
 
     async def verify(self) -> bool:
-        output = await self._run_command(
+        await self._run_command(
             "kubectl",
-            "get",
+            "wait",
+            "--for=condition=Ready",
             "pods",
+            "--all",
             "-n",
             self.namespace,
-            "-o",
-            "jsonpath={.items[*].status.phase}",
+            "--timeout=300s",
         )
-        if not output:
-            return True
-        phases = output.split()
-        return all(p in ("Running", "Succeeded") for p in phases)
+        logger.info("All pods in %s are Ready", self.namespace)
+        return True

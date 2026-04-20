@@ -273,7 +273,6 @@ class LinkerdManager:
         self, kubeconfig_path: str, namespaces: list[str]
     ) -> None:
         try:
-            # Enable namespace injection
             for ns in namespaces:
                 await self._run_kubectl(
                     "annotate",
@@ -281,6 +280,25 @@ class LinkerdManager:
                     ns,
                     "linkerd.io/inject=enabled",
                     "--overwrite",
+                    kubeconfig_path=kubeconfig_path,
+                )
+                # Restart existing workloads so the admission webhook
+                # injects the proxy sidecar into already-running pods.
+                await self._run_kubectl(
+                    "rollout",
+                    "restart",
+                    "deployment",
+                    "-n",
+                    ns,
+                    kubeconfig_path=kubeconfig_path,
+                )
+                await self._run_kubectl(
+                    "rollout",
+                    "status",
+                    "deployment",
+                    "-n",
+                    ns,
+                    "--timeout=600s",
                     kubeconfig_path=kubeconfig_path,
                 )
             logger.info("Enabling Namespace Injection Success")
