@@ -92,7 +92,9 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
 ) -> dict[str, str]:
     """Execute Chaos Experiment phases in order"""
     litmus_manager = LitmusChaosManager(
-        kubectl_binary=settings.KUBECTL_BINARY, litmus_version=settings.LITMUS_VERSION
+        kubectl_binary=settings.KUBECTL_BINARY,
+        litmus_version=settings.LITMUS_VERSION,
+        litmus_runner_image=settings.LITMUS_RUNNER_IMAGE,
     )
 
     kubeconfig = cluster.kubeconfig
@@ -149,6 +151,7 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             experiment_type=litmus_name,
             app_label=experiment.target_label,
             duration=experiment.duration_seconds,
+            configuration=experiment.configuration,
         )
 
         await chaos_repo.update(

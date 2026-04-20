@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.exceptions.errors import ForbiddenError, UnauthorizedError
 from app.models.user import User
+from app.repositories.campaign import CampaignRepository
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
@@ -18,6 +19,7 @@ from app.repositories.job import JobRepository
 from app.repositories.observability import ObservabilityRepository
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
+from app.services.campaign import CampaignService
 from app.services.chaos import ChaosService
 from app.services.cluster import ClusterService
 from app.services.deployment import DeploymentService
@@ -199,3 +201,31 @@ def get_chaos_service(
 
 
 ChaosServiceDep = Annotated[ChaosService, Depends(get_chaos_service)]
+
+
+# Campaign Repository
+def get_campaign_repository(db: DbSession) -> CampaignRepository:
+    return CampaignRepository(db)
+
+
+CampaignRepositoryDep = Annotated[
+    CampaignRepository, Depends(get_campaign_repository)
+]
+
+
+# Campaign Service
+def get_campaign_service(
+    campaign_repository: CampaignRepositoryDep,
+    cluster_repository: ClusterRepositoryDep,
+    deployment_repository: DeploymentRepositoryDep,
+    job_repository: JobRepositoryDep,
+) -> CampaignService:
+    return CampaignService(
+        campaign_repository=campaign_repository,
+        cluster_repository=cluster_repository,
+        deployment_repository=deployment_repository,
+        job_repository=job_repository,
+    )
+
+
+CampaignServiceDep = Annotated[CampaignService, Depends(get_campaign_service)]

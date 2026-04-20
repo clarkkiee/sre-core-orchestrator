@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.campaign import ChaosCampaign
     from app.models.chaos import ChaosExperiment
     from app.models.deployment import Deployment
     from app.models.job import Job
@@ -145,6 +146,9 @@ class Cluster(Base):
 
     chaos_experiments: Mapped[list["ChaosExperiment"]] = relationship(
         "ChaosExperiment", back_populates="cluster", cascade="all, delete-orphan"
+    )
+    chaos_campaigns: Mapped[list["ChaosCampaign"]] = relationship(
+        "ChaosCampaign", back_populates="cluster", cascade="all, delete-orphan"
     )
 
     def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401

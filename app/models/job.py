@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.campaign import ChaosCampaign
     from app.models.cluster import Cluster
     from app.models.deployment import Deployment
     from app.models.user import User
@@ -27,6 +28,7 @@ class JobType(enum.StrEnum):
     DEPLOY_APPLICATION = "DEPLOY_APPLICATION"
     DELETE_DEPLOYMENT = "DELETE_DEPLOYMENT"
     RUN_CHAOS_EXPERIMENT = "RUN_CHAOS_EXPERIMENT"
+    RUN_CHAOS_CAMPAIGN = "RUN_CHAOS_CAMPAIGN"
 
 
 class JobStatus(enum.StrEnum):
@@ -66,6 +68,13 @@ class Job(Base):
         nullable=True,
         index=True,
         comment="Associated deployment, if this job is a deploy task",
+    )
+
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chaos_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     job_type: Mapped[JobType] = mapped_column(
@@ -133,6 +142,10 @@ class Job(Base):
     )
     deployment: Mapped["Deployment | None"] = relationship(
         "Deployment",
+        back_populates="jobs",
+    )
+    campaign: Mapped["ChaosCampaign | None"] = relationship(
+        "ChaosCampaign",
         back_populates="jobs",
     )
 

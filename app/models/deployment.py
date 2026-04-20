@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models import Base
 
 if TYPE_CHECKING:
+    from app.models.campaign import ChaosCampaign
     from app.models.chaos import ChaosExperiment
     from app.models.cluster import Cluster
     from app.models.job import Job
@@ -140,6 +141,9 @@ class Deployment(Base):
     )
     chaos_experiments: Mapped[list["ChaosExperiment"]] = relationship(
         "ChaosExperiment", back_populates="deployment", cascade="all, delete-orphan"
+    )
+    chaos_campaigns: Mapped[list["ChaosCampaign"]] = relationship(
+        "ChaosCampaign", back_populates="deployment", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
