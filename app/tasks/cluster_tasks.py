@@ -2,14 +2,12 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from app.infrastructure.chaos.manager import LitmusChaosManager
-from app.infrastructure.kind import KindClient, KindCommandError
-from app.infrastructure.kind.config_builder import KindConfigBuilder
 from app.infrastructure.kubernetes import KubernetesVerifier
 from app.infrastructure.metrics.deployer import MonitoringStackDeployer
+from app.infrastructure.providers import get_provider
 from app.infrastructure.servicemesh.manager import LinkerdManager
 from app.models.cluster import ClusterStatus
 from app.models.deployment import DeploymentStatus
@@ -36,7 +34,7 @@ def provision_cluster_task(
     cluster_id: str,
     job_id: str,
 ) -> dict[str, str]:
-    """Provision a KinD cluster (dispatched by ClusterService)."""
+    """Provision a cluster using the configured provider."""
     _ = self
     return asyncio.run(_provision_cluster(cluster_id, job_id))
 
@@ -53,7 +51,7 @@ def teardown_cluster_task(
     cluster_id: str,
     job_id: str,
 ) -> dict[str, str]:
-    """Teardown a KinD cluster (dispatched by ClusterService)."""
+    """Teardown a cluster using the provider it was created with."""
     _ = self
     return asyncio.run(_teardown_cluster(cluster_id, job_id))
 
@@ -70,7 +68,7 @@ def reconnect_cluster_task(
     cluster_id: str,
     job_id: str,
 ) -> dict[str, str]:
-    """Reconnect a KinD cluster (dispatched by ClusterService)."""
+    """Reconnect a cluster using the provider it was created with."""
     _ = self
     return asyncio.run(_reconnect_cluster(cluster_id, job_id))
 
@@ -112,91 +110,33 @@ async def _run_provisioning_phases(
     job: Any,  # noqa: ANN401
     session: Any,  # noqa: ANN401
 ) -> dict[str, str]:
-    """Execute the provisioning phases in order."""
-    kind_client = KindClient(kind_binary=settings.KIND_BINARY)
-    config_builder = KindConfigBuilder(
-        port_range_start=settings.KIND_PORT_RANGE_START,
-        port_range_end=settings.KIND_PORT_RANGE_END,
-        ports_per_block=settings.KIND_PORTS_PER_BLOCK,
-    )
+    """Execute provisioning phases via the cluster provider."""
+    config = cluster.ports or {}
+    provider_type = config.get("provider", settings.CLUSTER_PROVIDER)
+    provider = get_provider(provider_type, cluster_repo=cluster_repo)
     verifier = KubernetesVerifier()
 
-    # Phase 1: BUILDING_CONFIG (10%)
     await cluster_repo.update(cluster, status=ClusterStatus.PROVISIONING)
     await job_repo.update(
         job,
         status=JobStatus.RUNNING,
         started_at=datetime.now(UTC),
-        current_phase="BUILDING_CONFIG",
-        progress_percentage=10,
     )
     await session.commit()
 
-    ports_data = cluster.ports or {}
-    worker_count = ports_data.get("worker_count", 2)
-    config = config_builder.build_config(
-        cluster_name=cluster.kind_name,
-        ports_data=ports_data,
-        worker_count=worker_count,
-        registry_url=settings.PRIVATE_REGISTRY_URL,
-    )
-    config_path = config_builder.write_config(
-        config,
-        Path(settings.KUBECONFIG_DIR) / f"kind-config-{cluster.kind_name}.yaml",
-    )
+    async def on_progress(phase: str, pct: int) -> None:
+        await job_repo.update(job, current_phase=phase, progress_percentage=pct)
+        await session.commit()
 
-    # Phase 2: CREATING_CLUSTER (25%)
-    await job_repo.update(
-        job,
-        current_phase="CREATING_CLUSTER",
-        progress_percentage=25,
-    )
-    await session.commit()
+    # Provider handles infra-specific phases (5-55%)
+    result = await provider.provision(cluster.kind_name, config, on_progress)
 
-    if not await kind_client.cluster_exists(cluster.kind_name):
-        await kind_client.create_cluster(cluster.kind_name, str(config_path))
+    # Phase: VERIFYING (60%)
+    await on_progress("VERIFYING", 60)
+    await verifier.verify_cluster_ready(result.kubeconfig_content)
 
-    # Phase 3: EXPORTING_KUBECONFIG (45%)
-    await job_repo.update(
-        job,
-        current_phase="EXPORTING_KUBECONFIG",
-        progress_percentage=45,
-    )
-    await session.commit()
-
-    kubeconfig_path = str(
-        Path(settings.KUBECONFIG_DIR) / f"kubeconfig-{cluster.kind_name}.yaml",
-    )
-    await kind_client.export_kubeconfig(cluster.kind_name, kubeconfig_path)
-
-    # Connect the Kind control-plane to this container's Docker network
-    # so the Celery worker can reach the API server directly.
-    network = await kind_client.get_own_network()
-    await kind_client.connect_to_network(cluster.kind_name, network)
-    cp_ip = await kind_client.get_control_plane_ip(cluster.kind_name, network=network)
-    kubeconfig_content = await kind_client.rewrite_kubeconfig_server(
-        kubeconfig_path,
-        cp_ip,
-    )
-
-    # Phase 4: VERIFYING (60%)
-    await job_repo.update(
-        job,
-        current_phase="VERIFYING",
-        progress_percentage=60,
-    )
-    await session.commit()
-
-    await verifier.verify_cluster_ready(kubeconfig_content)
-
-    # Phase 5: DEPLOYING_MONITORING (70%)
-    await job_repo.update(
-        job,
-        current_phase="DEPLOYING_MONITORING",
-        progress_percentage=70,
-    )
-    await session.commit()
-
+    # Phase: DEPLOYING_MONITORING (70%)
+    await on_progress("DEPLOYING_MONITORING", 70)
     monitoring_deployer = MonitoringStackDeployer(
         vm_image=settings.VM_IMAGE,
         ksm_image=settings.KSM_IMAGE,
@@ -204,46 +144,35 @@ async def _run_provisioning_phases(
         bbe_image=settings.BLACKBOX_IMAGE,
     )
     vm_url = await monitoring_deployer.deploy(
-        kubeconfig_content, cp_ip, kind_name=cluster.kind_name
+        result.kubeconfig_content,
+        result.control_plane_ip,
     )
     await cluster_repo.update(cluster, victoriametrics_url=vm_url)
     await session.commit()
 
-    # Phase 6: DEPLOYING SERVICE MESH (LINKERD) (80%)
-    await job_repo.update(
-        job,
-        current_phase="DEPLOYING_LINKERD",
-        progress_percentage=80,
-    )
-    await session.commit()
-
+    # Phase: DEPLOYING_LINKERD (80%)
+    await on_progress("DEPLOYING_LINKERD", 80)
     linkerd_manager = LinkerdManager(
         gateway_api_version=settings.GATEWAY_API_VERSION,
         kubectl_binary=settings.KUBECTL_BINARY,
         linkerd_binary=settings.LINKERD_BINARY,
     )
+    await linkerd_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 
-    await linkerd_manager.deploy(kubeconfig_content=kubeconfig_content)
-
-    # Phase 7: DEPLOYING_LITMUS (85%)
-    await job_repo.update(
-        job,
-        current_phase="DEPLOYING_LITMUS",
-        progress_percentage=85,
-    )
-    await session.commit()
-
+    # Phase: DEPLOYING_LITMUS (85%)
+    await on_progress("DEPLOYING_LITMUS", 85)
     litmus_manager = LitmusChaosManager(
-        kubectl_binary=settings.KUBECTL_BINARY, litmus_version=settings.LITMUS_VERSION
+        kubectl_binary=settings.KUBECTL_BINARY,
+        litmus_version=settings.LITMUS_VERSION,
+        litmus_runner_image=settings.LITMUS_RUNNER_IMAGE,
     )
+    await litmus_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 
-    await litmus_manager.deploy(kubeconfig_content=kubeconfig_content)
-
-    # Phase 6: COMPLETE (100%)
+    # Phase: COMPLETE (100%)
     await cluster_repo.update(
         cluster,
         status=ClusterStatus.READY,
-        kubeconfig=kubeconfig_content,
+        kubeconfig=result.kubeconfig_content,
         status_message="Cluster provisioned successfully",
     )
     await job_repo.update(
@@ -300,7 +229,6 @@ async def _teardown_cluster(
     cluster_id: str,
     job_id: str,
 ) -> dict[str, str]:
-    kind_client = KindClient(kind_binary=settings.KIND_BINARY)
     cid = uuid.UUID(cluster_id)
     jid = uuid.UUID(job_id)
 
@@ -324,8 +252,10 @@ async def _teardown_cluster(
             )
             await session.commit()
 
-            if await kind_client.cluster_exists(cluster.kind_name):
-                await kind_client.delete_cluster(cluster.kind_name)
+            config = cluster.ports or {}
+            provider_type = config.get("provider", settings.CLUSTER_PROVIDER)
+            provider = get_provider(provider_type)
+            await provider.teardown(cluster.kind_name, config)
 
             # Soft-delete all active deployments on this cluster
             deployment_repo = DeploymentRepository(session)
@@ -370,8 +300,6 @@ async def _reconnect_cluster(
     job_id: str,
 ) -> dict[str, str]:
     """Re-discover control-plane IP, rewrite kubeconfig, and verify health."""
-    kind_client = KindClient(kind_binary=settings.KIND_BINARY)
-    verifier = KubernetesVerifier()
     cid = uuid.UUID(cluster_id)
     jid = uuid.UUID(job_id)
 
@@ -386,81 +314,42 @@ async def _reconnect_cluster(
             raise ValueError(msg)
 
         try:
-            # Phase 1: CHECK_CONTAINER (10%)
             await job_repo.update(
                 job,
                 status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
-                current_phase="CHECK_CONTAINER",
+                current_phase="CHECK_INFRASTRUCTURE",
                 progress_percentage=10,
             )
             await session.commit()
 
-            container_name = f"{cluster.kind_name}-control-plane"
+            config = cluster.ports or {}
+            provider_type = config.get("provider", settings.CLUSTER_PROVIDER)
+            provider = get_provider(provider_type)
+
             try:
-                await kind_client._docker("inspect", container_name)  # noqa: SLF001
-            except KindCommandError:
+                result = await provider.reconnect(cluster.kind_name, config)
+            except RuntimeError as exc:
                 await cluster_repo.update(
                     cluster,
                     status=ClusterStatus.FAILED,
-                    status_message=(
-                        "Kind container no longer exists. "
-                        "Please delete this cluster and re-provision."
-                    ),
+                    status_message=str(exc)[:500],
                 )
                 await job_repo.update(
                     job,
                     status=JobStatus.FAILED,
-                    current_phase="CHECK_CONTAINER",
-                    error_message="Kind container not found."
-                    "Cluster must be re-provisioned.",
+                    current_phase="CHECK_INFRASTRUCTURE",
+                    error_message=str(exc)[:1000],
                     completed_at=datetime.now(UTC),
                 )
                 await session.commit()
                 return {
                     "status": "failed",
                     "cluster_id": cluster_id,
-                    "reason": "container_not_found",
+                    "reason": "infrastructure_not_found",
                 }
 
-            # Phase 2: RECONNECT_NETWORK (30%)
-            await job_repo.update(
-                job,
-                current_phase="RECONNECT_NETWORK",
-                progress_percentage=30,
-            )
-            await session.commit()
-
-            network = await kind_client.get_own_network()
-            try:
-                await kind_client.connect_to_network(cluster.kind_name, network)
-            except KindCommandError as exc:
-                if "already exists" not in exc.stderr.lower():
-                    raise
-
-            # Phase 3: EXPORT_KUBECONFIG (50%)
-            await job_repo.update(
-                job,
-                current_phase="EXPORT_KUBECONFIG",
-                progress_percentage=50,
-            )
-            await session.commit()
-
-            kubeconfig_path = str(
-                Path(settings.KUBECONFIG_DIR) / f"kubeconfig-{cluster.kind_name}.yaml",
-            )
-            await kind_client.export_kubeconfig(cluster.kind_name, kubeconfig_path)
-
-            cp_ip = await kind_client.get_control_plane_ip(
-                cluster.kind_name,
-                network=network,
-            )
-            kubeconfig_content = await kind_client.rewrite_kubeconfig_server(
-                kubeconfig_path,
-                cp_ip,
-            )
-
-            # Phase 4: VERIFYING (75%)
+            # Phase: VERIFYING (75%)
             await job_repo.update(
                 job,
                 current_phase="VERIFYING",
@@ -468,16 +357,17 @@ async def _reconnect_cluster(
             )
             await session.commit()
 
+            verifier = KubernetesVerifier()
             await verifier.verify_cluster_ready(
-                kubeconfig_content,
+                result.kubeconfig_content,
                 timeout_seconds=60,
             )
 
-            # Phase 5: COMPLETE (100%)
+            # Phase: COMPLETE (100%)
             await cluster_repo.update(
                 cluster,
                 status=ClusterStatus.READY,
-                kubeconfig=kubeconfig_content,
+                kubeconfig=result.kubeconfig_content,
                 status_message="Cluster reconnected successfully",
             )
             await job_repo.update(

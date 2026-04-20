@@ -52,6 +52,7 @@ def upgrade() -> None:
                 "FAILED",
                 "DELETING",
                 "DELETED",
+                "UNREACHABLE",
                 name="clusterstatus",
             ),
             nullable=False,

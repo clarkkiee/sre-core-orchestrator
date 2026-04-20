@@ -66,6 +66,9 @@ dependencies = [
     # HTTP Client
     "httpx>=0.26.0",  # Modern async HTTP client
 
+    # SSH (remote Multipass execution)
+    "asyncssh>=2.14.0",  # Async SSH client for remote command execution
+
     # Task Queue
     "celery>=5.3.6",  # Distributed task queue
 
@@ -236,6 +239,8 @@ module = [
     "httpx",
     "httpx.*",
     "uvicorn.*",
+    "asyncssh",
+    "asyncssh.*",
     "bcrypt",
     "jwt.*",
     "pytest",

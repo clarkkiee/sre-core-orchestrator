@@ -48,13 +48,11 @@ class MonitoringStackDeployer:
         self,
         kubeconfig_content: str,
         control_plane_ip: str,
-        kind_name: str | None = None,
     ) -> str:
         """Deploy the full monitoring stack.
 
         Returns the VictoriaMetrics base URL reachable from outside
-        the cluster using Docker DNS (e.g. ``http://sre-xxx-control-plane:30090``).
-        Falls back to IP if ``kind_name`` is not provided.
+        the cluster (e.g. ``http://<ip>:30090``).
         """
         api_client = await self._build_api_client(kubeconfig_content)
         try:
@@ -79,8 +77,7 @@ class MonitoringStackDeployer:
         finally:
             await api_client.close()
 
-        # Use Docker DNS hostname for stability
-        host = f"{kind_name}-control-plane" if kind_name else control_plane_ip
+        host = control_plane_ip
         vm_url = f"http://{host}:{self._vm_nodeport}"
         await self._health_check(vm_url)
 
