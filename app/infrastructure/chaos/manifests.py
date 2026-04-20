@@ -4,7 +4,7 @@ from typing import Any
 
 _LITMUSCHAOS_NS = "litmus"
 
-_LITMUS_IMAGE = "litmuschaos/go-runner:3.9.0"
+_DEFAULT_LITMUS_IMAGE = "litmuschaos/go-runner:3.27.0"
 
 # ---------------------------------------------------------------------------
 # Experiment template registry
@@ -41,7 +41,7 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "PODS_AFFECTED_PERC": "0",
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
-            "SOCKET_PATH": "/run/containerd/containerd.sock",
+            "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
         },
     },
     "pod-memory-hog": {
@@ -53,7 +53,7 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "PODS_AFFECTED_PERC": "0",
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
-            "SOCKET_PATH": "/run/containerd/containerd.sock",
+            "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
         },
     },
     "pod-network-latency": {
@@ -66,7 +66,7 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "PODS_AFFECTED_PERC": "0",
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
-            "SOCKET_PATH": "/run/containerd/containerd.sock",
+            "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
         },
     },
     "pod-network-loss": {
@@ -78,7 +78,7 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "PODS_AFFECTED_PERC": "0",
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
-            "SOCKET_PATH": "/run/containerd/containerd.sock",
+            "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
         },
     },
 }
@@ -222,7 +222,11 @@ _NEEDS_RUNTIME_SOCKET = {
 }
 
 
-def build_chaos_experiment(experiment_type: str, namespace: str) -> dict[str, Any]:
+def build_chaos_experiment(
+    experiment_type: str,
+    namespace: str,
+    litmus_image: str = _DEFAULT_LITMUS_IMAGE,
+) -> dict[str, Any]:
     """Return a ChaosExperiment CR for the given fault type in the target namespace.
 
     Raises KeyError if experiment_type is not in EXPERIMENT_TEMPLATES.
@@ -232,7 +236,7 @@ def build_chaos_experiment(experiment_type: str, namespace: str) -> dict[str, An
 
     definition: dict[str, Any] = {
         "scope": "Namespaced",
-        "image": _LITMUS_IMAGE,
+        "image": litmus_image,
         "command": ["/bin/bash"],
         "args": ["-c", template["args"]],
         "env": env_list,
@@ -280,21 +284,34 @@ def build_chaos_experiment(experiment_type: str, namespace: str) -> dict[str, An
     }
 
 
-def _build_engine_env(experiment_type: str, duration: int) -> list[dict[str, str]]:
-    """Build the full env list for a ChaosEngine experiment, merging template defaults
-    with the user-provided duration override."""
+def _build_engine_env(
+    experiment_type: str,
+    duration: int,
+    configuration: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    """Build the full env list for a ChaosEngine experiment.
+
+    Merge order (highest priority last):
+      1. Template defaults from EXPERIMENT_TEMPLATES
+      2. Duration override
+      3. User-provided configuration overrides
+    """
     template = EXPERIMENT_TEMPLATES[experiment_type]
     env = dict(template["env"])
     env["TOTAL_CHAOS_DURATION"] = str(duration)
+    if configuration:
+        for key, value in configuration.items():
+            env[key] = str(value).lower() if isinstance(value, bool) else str(value)
     return [{"name": k, "value": v} for k, v in env.items()]
 
 
-def build_chaos_engine(
+def build_chaos_engine(  # noqa: PLR0913
     engine_name: str,
     namespace: str,
     app_label: str,
     experiment_type: str,
     duration: int,
+    configuration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a ChaosEngine CR that triggers the experiment against the target app.
 
@@ -304,6 +321,7 @@ def build_chaos_engine(
         app_label:       Label selector for the target pods (e.g. "app=frontend").
         experiment_type: Must match a ChaosExperiment CR name in the same namespace.
         duration:        Overrides TOTAL_CHAOS_DURATION (seconds).
+        configuration:   Optional env-var overrides (e.g. TARGET_CONTAINER).
     """
     return {
         "apiVersion": "litmuschaos.io/v1alpha1",
@@ -332,7 +350,9 @@ def build_chaos_engine(
                     "name": experiment_type,
                     "spec": {
                         "components": {
-                            "env": _build_engine_env(experiment_type, duration),
+                            "env": _build_engine_env(
+                                experiment_type, duration, configuration
+                            ),
                             "experimentAnnotations": {
                                 "linkerd.io/inject": "disabled",
                             },

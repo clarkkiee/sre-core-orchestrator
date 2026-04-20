@@ -34,9 +34,11 @@ class LitmusChaosManager:
         self,
         kubectl_binary: str,
         litmus_version: str,
+        litmus_runner_image: str = "litmuschaos/go-runner:3.27.0",
     ) -> None:
         self._kubectl_binary = kubectl_binary
         self._litmus_version = litmus_version
+        self._litmus_runner_image = litmus_runner_image
 
     async def _run_kubectl(self, *args: str, kubeconfig_path: str) -> str:
         cmd = [self._kubectl_binary, *args]
@@ -245,7 +247,9 @@ class LitmusChaosManager:
             # Apply ChaosExperiment templates (create or patch)
             for exp_type in EXPERIMENT_TEMPLATES:
                 body = build_chaos_experiment(
-                    experiment_type=exp_type, namespace=namespace
+                    experiment_type=exp_type,
+                    namespace=namespace,
+                    litmus_image=self._litmus_runner_image,
                 )
                 try:
                     await custom.create_namespaced_custom_object(
@@ -290,6 +294,7 @@ class LitmusChaosManager:
         app_label: str,
         experiment_type: str,
         duration: int,
+        configuration: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         body = build_chaos_engine(
             app_label=app_label,
@@ -297,6 +302,7 @@ class LitmusChaosManager:
             engine_name=engine_name,
             experiment_type=experiment_type,
             namespace=namespace,
+            configuration=configuration,
         )
 
         api_client = await self._build_api_client(kubeconfig_content)

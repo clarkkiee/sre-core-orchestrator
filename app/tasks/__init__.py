@@ -4,6 +4,7 @@ Re-exports celery_app and all task functions for backward compatibility.
 Importing task modules here ensures Celery discovers them.
 """
 
+from app.tasks.campaign_tasks import run_chaos_campaign_task
 from app.tasks.celery_config import celery_app
 from app.tasks.chaos_tasks import run_chaos_experiment_task
 from app.tasks.cluster_tasks import (
@@ -13,18 +14,15 @@ from app.tasks.cluster_tasks import (
 )
 from app.tasks.deployment_tasks import delete_deployment_task, deploy_application_task
 from app.tasks.observability_tasks import collect_metrics_task
-from app.tasks.placeholder_tasks import (
-    example_task,
-)
 
 __all__ = [
     "celery_app",
     "collect_metrics_task",
     "delete_deployment_task",
     "deploy_application_task",
-    "example_task",
     "provision_cluster_task",
     "reconnect_cluster_task",
+    "run_chaos_campaign_task"
     "run_chaos_experiment_task",
     "teardown_cluster_task",
 ]

@@ -78,6 +78,13 @@ class ChaosExperiment(Base):
         nullable=True,
     )
 
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chaos_campaigns.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
     configuration: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -102,3 +109,4 @@ class ChaosExperiment(Base):
     tenant = relationship("User", back_populates="chaos_experiments")
     cluster = relationship("Cluster", back_populates="chaos_experiments")
     deployment = relationship("Deployment", back_populates="chaos_experiments")
+    campaign = relationship("ChaosCampaign", back_populates="experiments")

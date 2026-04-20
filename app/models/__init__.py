@@ -7,6 +7,10 @@ class Base(DeclarativeBase):
     """Base class for all database models."""
 
 
+from app.models.campaign import (  # noqa: E402
+    CampaignStatus,
+    ChaosCampaign,
+)
 from app.models.chaos import (  # noqa: E402
     ChaosExperiment,
     ChaosExperimentStatus,
@@ -28,6 +32,8 @@ from app.models.user import User  # noqa: E402
 
 __all__ = [
     "Base",
+    "CampaignStatus",
+    "ChaosCampaign",
     "ChaosExperiment",
     "ChaosExperimentStatus",
     "Cluster",
