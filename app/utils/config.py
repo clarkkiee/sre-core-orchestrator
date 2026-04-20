@@ -47,6 +47,36 @@ class Settings(BaseSettings):
     KIND_PORTS_PER_BLOCK: int = 20
     CLUSTER_DEFAULT_TTL_DAYS: int = 7
     PRIVATE_REGISTRY_URL: str | None = None
+    CLUSTER_PROVIDER: str = "multipass_k3s"  # "kind" | "multipass_k3s"
+
+    # Multipass + k3s settings (used when CLUSTER_PROVIDER=multipass_k3s)
+    MULTIPASS_BINARY: str = "/snap/bin/multipass"
+    VM_CPUS: int = 2
+    VM_MEMORY: str = "2G"
+    VM_DISK: str = "10G"
+    K3S_DISABLE_TRAEFIK: bool = True
+
+    # Provisioning Agent settings
+    # When MULTIPASS_USE_AGENT=true the orchestrator delegates to a Go agent
+    # on the host instead of running multipass commands over SSH.
+    MULTIPASS_USE_AGENT: bool = True
+    AGENT_HOST: str = "172.17.0.1"  # Falls back to SSH_HOST if empty
+    AGENT_PORT: int = 9090
+    AGENT_API_TOKEN: str = ""
+    AGENT_BINARY_PATH: str = "/app/agent/orchestrator-agent"
+    AGENT_POLL_INTERVAL: float = 3.0
+    AGENT_POLL_TIMEOUT: int = 1800
+    AGENT_BOOTSTRAP_TIMEOUT: int = 30
+
+    # SSH settings for remote Multipass execution
+    # When MULTIPASS_USE_SSH=true the orchestrator connects to SSH_HOST
+    # and runs multipass commands there (required when running in Docker).
+    MULTIPASS_USE_SSH: bool = True
+    SSH_HOST: str = "127.0.0.1"
+    SSH_PORT: int = 22
+    SSH_USER: str = ""
+    SSH_KEY_PATH: str | None = None
+    SSH_PASSWORD: str | None = None
 
     # Service Mesh / Linkerd
     LINKERD_BINARY: str = "/usr/local/bin/linkerd"
@@ -63,7 +93,8 @@ class Settings(BaseSettings):
     GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108
 
     # LitmusChaos
-    LITMUS_VERSION: str = "3.9.0"
+    LITMUS_VERSION: str = "3.27.0"
+    LITMUS_RUNNER_IMAGE: str = "litmuschaos/go-runner:3.27.0"
 
     @property
     def DATABASE_URL(self) -> str:  # noqa: N802

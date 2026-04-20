@@ -22,6 +22,14 @@ RUN uv venv /opt/venv && \
     . /opt/venv/bin/activate && \
     uv pip install --no-cache -e .
 
+# Stage 1.5 - Go Agent Builder
+FROM golang:1.22-alpine AS agent-builder
+WORKDIR /agent
+COPY agent/go.mod agent/go.sum ./
+RUN go mod download
+COPY agent/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /orchestrator-agent .
+
 # Stage 2 - Development
 FROM python:3.12.1-slim AS development
 
@@ -31,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     git \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz | \
@@ -58,6 +67,7 @@ RUN curl -fsL https://run.linkerd.io/install | sh && \
     chmod +x /usr/local/bin/linkerd
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=agent-builder /orchestrator-agent /app/agent/orchestrator-agent
 ENV PATH="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -89,6 +99,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     netcat-openbsd \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz | \
@@ -116,6 +127,7 @@ RUN curl -fsL https://run.linkerd.io/install | sh && \
     chmod +x /usr/local/bin/linkerd
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=agent-builder /orchestrator-agent /app/agent/orchestrator-agent
 ENV PATH="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

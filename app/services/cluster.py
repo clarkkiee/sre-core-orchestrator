@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.exceptions.errors import ConflictError, NotFoundError
-from app.infrastructure.kind import KindConfigBuilder
+from app.infrastructure.providers import get_provider
 from app.models.cluster import Cluster, ClusterStatus
 from app.models.job import Job, JobStatus, JobType
 from app.models.user import User
@@ -33,11 +33,6 @@ class ClusterService:
     ) -> None:
         self.cluster_repository = cluster_repository
         self.job_repository = job_repository
-        self.config_builder = KindConfigBuilder(
-            port_range_start=settings.KIND_PORT_RANGE_START,
-            port_range_end=settings.KIND_PORT_RANGE_END,
-            ports_per_block=settings.KIND_PORTS_PER_BLOCK,
-        )
 
     @staticmethod
     def _generate_kind_name(tenant_id: uuid.UUID, name: str) -> str:
@@ -62,14 +57,12 @@ class ClusterService:
             msg = f"Cluster '{payload.name}' already exists"
             raise ConflictError(msg)
 
-        # Serialise port-block allocation
-        await self.cluster_repository.acquire_port_allocation_lock()
-        occupied = await self.cluster_repository.get_occupied_port_blocks()
-        block_index = self.config_builder.find_available_block(
-            kind_name,
-            occupied,
+        # Prepare provider-specific config (includes port-block allocation for Kind)
+        provider = get_provider(
+            settings.CLUSTER_PROVIDER,
+            cluster_repo=self.cluster_repository,
         )
-        ports_data = self.config_builder.allocate_ports(block_index)
+        provider_config = await provider.prepare_config(kind_name, payload.worker_count)
 
         # Create cluster record
         cluster = Cluster(
@@ -79,8 +72,7 @@ class ClusterService:
             app_preset=payload.app_preset,
             status=ClusterStatus.PENDING,
             ports={
-                **ports_data,
-                "worker_count": payload.worker_count,
+                **provider_config,
                 "allocated_at": datetime.now(UTC).isoformat(),
             },
             expires_at=datetime.now(UTC) + timedelta(days=payload.expires_in_days),

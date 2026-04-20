@@ -31,6 +31,7 @@ services:
       - ./app:/app/app:cached
       - ./pipeline:/app/pipeline:cached
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/ssh:/app/.ssh:ro
     environment:
       - ENV=development
       - LOG_LEVEL=DEBUG
