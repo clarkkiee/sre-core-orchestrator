@@ -1,6 +1,8 @@
 """Centralized FastAPI dependency injection wiring."""
 
 import uuid
+from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends
@@ -10,6 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.exceptions.errors import ForbiddenError, UnauthorizedError
+from app.infrastructure.metrics.catalog import MetricCatalog
+from app.infrastructure.metrics.client_factory import VictoriaMetricsClientFactory
+from app.infrastructure.metrics.query_engine import MetricsQueryEngine
 from app.models.user import User
 from app.repositories.campaign import CampaignRepository
 from app.repositories.chaos import ChaosRepository
@@ -17,6 +22,7 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.repositories.observability import ObservabilityRepository
+from app.repositories.raw_metric_sample import RawMetricSampleRepository
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
 from app.services.campaign import CampaignService
@@ -229,3 +235,40 @@ def get_campaign_service(
 
 
 CampaignServiceDep = Annotated[CampaignService, Depends(get_campaign_service)]
+
+_METRICS_CATALOG_DIR = Path("config/metrics")
+
+@lru_cache(maxsize=1)
+def get_metric_catalog() -> MetricCatalog:
+    return MetricCatalog.load_from_dir(_METRICS_CATALOG_DIR)
+
+def get_raw_metric_sample_repository(db: DbSession) -> RawMetricSampleRepository:
+    return RawMetricSampleRepository(db)
+
+def get_victoriametrics_factory(
+    cluster_repo: Annotated[ClusterRepository, Depends(get_cluster_repository)],
+    experiment_repo: Annotated[ChaosRepository, Depends(get_chaos_repository)]
+) -> VictoriaMetricsClientFactory:
+    return VictoriaMetricsClientFactory(
+        cluster_repo=cluster_repo,
+        experiment_repo=experiment_repo
+    )
+
+def get_metrics_query_engine(
+    factory: Annotated[
+        VictoriaMetricsClientFactory, Depends(get_victoriametrics_factory)
+    ],
+    catalog: Annotated[MetricCatalog, Depends(get_metric_catalog)],
+    repo: Annotated[
+        RawMetricSampleRepository, Depends(get_raw_metric_sample_repository)
+    ]
+) -> MetricsQueryEngine:
+    return MetricsQueryEngine(
+        client_factory=factory,
+        catalog=catalog,
+        repo=repo
+    )
+
+MetricsQueryEngineDep = Annotated[
+    MetricsQueryEngine, Depends(get_metrics_query_engine)
+]

@@ -1,0 +1,17 @@
+metrics:
+  - name: response_total
+    source: linkerd_proxy
+    description: "Total responses by classification and direction"
+    promql_template: 'response_total{namespace="$ns"}'
+    unit: count
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, deployment, classification, direction]
+  - name: response_latency_ms_bucket
+    source: linkerd_proxy
+    description: "Response latency histogram buckets (ms)"
+    promql_template: 'response_latency_ms_bucket{namespace="$ns"}'
+    unit: count
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, deployment, le, direction]

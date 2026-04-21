@@ -1,0 +1,8 @@
+metrics:
+  - name: kube_pod_container_restarts_total
+    source: kube_state_metrics
+    promql_template: 'kube_pod_container_restarts_total{namespace="$ns"}'
+    unit: count
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, pod, container]
