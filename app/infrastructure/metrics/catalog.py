@@ -48,7 +48,9 @@ class MetricCatalog:
         self._defs = definitions
 
     @classmethod
-    def load_from_dir(cls, path: Path) -> MetricCatalog:
+    def load_from_dir(cls, path: Path | None = None) -> MetricCatalog:
+        if path is None:
+            path = Path(__file__).resolve().parent / "catalog_files"
         if not path.is_dir():
             msg = f"Catalog directory not found: {path}"
             raise MetricCatalogError(msg)

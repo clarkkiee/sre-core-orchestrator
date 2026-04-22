@@ -28,6 +28,10 @@ from app.models.observability import (  # noqa: E402
     ObservabilitySession,
     ReliabilityReport,
 )
+from app.models.raw_metric_sample import (  # noqa: E402
+    MetricPhase,
+    RawMetricSample,
+)
 from app.models.user import User  # noqa: E402
 
 __all__ = [
@@ -44,8 +48,10 @@ __all__ = [
     "Job",
     "JobStatus",
     "JobType",
+    "MetricPhase",
     "MetricSnapshot",
     "ObservabilitySession",
+    "RawMetricSample",
     "ReliabilityReport",
-    "User",
+    "User"
 ]

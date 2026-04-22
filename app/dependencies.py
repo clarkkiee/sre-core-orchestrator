@@ -2,7 +2,6 @@
 
 import uuid
 from functools import lru_cache
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends
@@ -236,11 +235,9 @@ def get_campaign_service(
 
 CampaignServiceDep = Annotated[CampaignService, Depends(get_campaign_service)]
 
-_METRICS_CATALOG_DIR = Path("config/metrics")
-
 @lru_cache(maxsize=1)
 def get_metric_catalog() -> MetricCatalog:
-    return MetricCatalog.load_from_dir(_METRICS_CATALOG_DIR)
+    return MetricCatalog.load_from_dir()
 
 def get_raw_metric_sample_repository(db: DbSession) -> RawMetricSampleRepository:
     return RawMetricSampleRepository(db)

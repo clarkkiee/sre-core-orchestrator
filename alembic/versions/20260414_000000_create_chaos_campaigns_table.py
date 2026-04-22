@@ -1,6 +1,6 @@
 """create_chaos_campaigns_table
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: f7a8b9c0d1e2
 Revises: 86e8664df672
 Create Date: 2026-04-14 00:00:00.000000+00:00
 

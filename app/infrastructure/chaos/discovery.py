@@ -53,7 +53,7 @@ def _extract_app_label(match_labels: dict[str, str] | None) -> str | None:
     """Return the first usable app label selector from Deployment matchLabels."""
     if not match_labels:
         return None
-    for key in ("app", "app.kubernetes.io/name"):
+    for key in ("app", "app.kubernetes.io/name", "name"):
         if key in match_labels:
             return f"{key}={match_labels[key]}"
     return None

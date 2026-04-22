@@ -104,7 +104,7 @@ class MetricsQueryEngine:
             report.per_metric.append(result)
 
         if buffered_rows:
-            inserted = await self._repoe.bulk_insert(buffered_rows)
+            inserted = await self._repo.bulk_insert(buffered_rows)
             report.total_samples = inserted
 
         return report
