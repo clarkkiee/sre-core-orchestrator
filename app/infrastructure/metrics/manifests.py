@@ -278,7 +278,27 @@ scrape_configs:
         - source_labels: [__meta_kubernetes_service_name]
           target_label: service
 
-"""
+  - job_name: "litmus-chaos-exporter"
+    kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names: ["litmus"]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_app]
+        action: keep
+        regex: chaos-monitor
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        action: keep
+        regex: http-metrics
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_service_name]
+        target_label: service
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        action: keep
+        regex: "litmuschaos_experiment_chaos_injected_time|litmuschaos_experiment_verdict|litmuschaos_probe_success_percentage"
+"""  # noqa: E501
 
 
 def build_victoria_metrics(

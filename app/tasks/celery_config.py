@@ -35,8 +35,8 @@ celery_app.conf.update(
     task_acks_late=False,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=4,
-    task_time_limit=14400,
-    task_soft_time_limit=13500,
+    task_time_limit=32400, # 9 jam
+    task_soft_time_limit=28800, # 8 jam
     result_expires=86400,
     task_default_retry_delay=60,
     task_max_retries=3,

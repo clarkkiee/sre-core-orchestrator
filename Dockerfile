@@ -63,8 +63,8 @@ RUN curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/
     mv kustomize /usr/local/bin/
 
 RUN curl -fsL https://run.linkerd.io/install | sh && \
-    mv /root/.linkerd2/bin/linkerd /usr/local/bin/linkerd && \
-    chmod +x /usr/local/bin/linkerd
+    cp -L /root/.linkerd2/bin/linkerd /usr/local/bin/linkerd && \
+    chmod 755 /usr/local/bin/linkerd
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=agent-builder /orchestrator-agent /app/agent/orchestrator-agent
@@ -123,8 +123,8 @@ RUN curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/
     mv kustomize /usr/local/bin/
 
 RUN curl -fsL https://run.linkerd.io/install | sh && \
-    mv /root/.linkerd2/bin/linkerd /usr/local/bin/linkerd && \
-    chmod +x /usr/local/bin/linkerd
+    cp -L /root/.linkerd2/bin/linkerd /usr/local/bin/linkerd && \
+    chmod 755 /usr/local/bin/linkerd
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=agent-builder /orchestrator-agent /app/agent/orchestrator-agent

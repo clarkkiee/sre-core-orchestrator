@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     CLUSTER_PROVIDER: str = "multipass_k3s"  # "kind" | "multipass_k3s"
 
     # Multipass + k3s settings (used when CLUSTER_PROVIDER=multipass_k3s)
-    MULTIPASS_BINARY: str = "/snap/bin/multipass"
+    MULTIPASS_BINARY: str = "/snap/bin/multipass" 
     VM_CPUS: int = 2
     VM_MEMORY: str = "2G"
     VM_DISK: str = "10G"

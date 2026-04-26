@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import tempfile
+import yaml
 from typing import Any
 
 from kubernetes_asyncio import client, config
@@ -17,6 +18,7 @@ from app.infrastructure.chaos.manifests import (
     build_chaos_engine,
     build_chaos_experiment,
     build_namespaced_litmuschaos_rbac,
+    build_chaos_exporter,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,13 @@ class LitmusChaosManager:
                 manifest_url,
                 kubeconfig_path=kc,
             )
+
+            # Deploy chaos-exporter
+            for cex_manifest in build_chaos_exporter(namespace=_LITMUS_NS):
+                await self._run_kubectl_apply_stdin(
+                    kubeconfig_path=kc,
+                    manifest_yaml=yaml.safe_dump(cex_manifest)
+                )
 
             # Poll until chaos-operator-ce deployment is available
             elapsed = 0

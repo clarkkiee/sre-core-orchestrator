@@ -103,6 +103,11 @@ class MetricsQueryEngine:
                 result.error = str(e)
             report.per_metric.append(result)
 
+        await self._repo.delete_for_experiment_phase(
+            experiment_id=experiment_id,
+            phase=phase
+        )
+
         if buffered_rows:
             inserted = await self._repo.bulk_insert(buffered_rows)
             report.total_samples = inserted

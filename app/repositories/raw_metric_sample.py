@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select, insert
+from sqlalchemy import select, insert, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.raw_metric_sample import MetricPhase, RawMetricSample
@@ -46,3 +46,16 @@ class RawMetricSampleRepository:
 
         result = await self._db.execute(stmt)
         return list(result.scalars().all())
+
+    async def delete_for_experiment_phase(
+        self,
+        experiment_id: uuid.UUID,
+        phase: MetricPhase
+    ) -> None:
+        stmt = delete(RawMetricSample).where(
+            (RawMetricSample.experiment_id == experiment_id) &
+            (RawMetricSample.phase == phase)
+        )
+
+        await self._db.execute(stmt)
+        await self._db.commit()

@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import (
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -78,6 +79,17 @@ class ChaosExperiment(Base):
         nullable=True,
     )
 
+    # Unix timestamp written by the evaluation pipeline immediately after
+    # poll_experiment_result returns, while the chaos-exporter gauge is still
+    # pointing at this engine.  Stored here so resolve_fault_window never needs
+    # to query VM post-hoc against a gauge that may already be overwritten.
+    chaos_injected_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    baseline_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_end: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovery_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recovery_end: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     campaign_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("chaos_campaigns.id", ondelete="CASCADE"),
@@ -110,3 +122,9 @@ class ChaosExperiment(Base):
     cluster = relationship("Cluster", back_populates="chaos_experiments")
     deployment = relationship("Deployment", back_populates="chaos_experiments")
     campaign = relationship("ChaosCampaign", back_populates="experiments")
+    evaluation = relationship(
+        "ExperimentEvaluation",
+        back_populates="experiment",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
