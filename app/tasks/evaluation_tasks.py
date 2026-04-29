@@ -6,7 +6,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from app.infrastructure.metrics.catalog import MetricCatalog
 from app.infrastructure.metrics.client_factory import VictoriaMetricsClientFactory
+from app.infrastructure.metrics.query_engine import MetricsQueryEngine
 from app.models.evaluation_indicator import ISOIndicator, MeasurementScope
 from app.models.raw_metric_sample import MetricPhase, RawMetricSample
 from app.repositories.chaos import ChaosRepository
@@ -14,16 +16,30 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.evaluation import EvaluationRepository
 from app.repositories.raw_metric_sample import RawMetricSampleRepository
 from app.services.evaluation import (
+    _FV_AVAILABILITY_BLACKBOX_HTTP,
+    _FV_AVAILABILITY_LINKERD,
+    _FV_AVAILABILITY_POD_READY,
+    _FV_CPU_UTILIZATION,
+    _FV_ERROR_RATE,
     _FV_FAILURE_RATE,
     _FV_MEAN_DOWN_TIME,
+    _FV_MEAN_FAULT_NOTIFICATION_TIME,
     _FV_MEAN_RECOVERY_TIME,
-    _FV_SYSTEM_AVAILABILITY,
+    _FV_MEAN_TIME_TO_FAILURE,
+    _FV_MEMORY_UTILIZATION,
+    _FV_RESPONSE_TIME_P95,
     FaultWindowResolutionError,
     PhaseWindows,
     build_indicator_rows,
+    compute_cpu_utilization,
+    compute_error_rate,
     compute_failure_rate,
     compute_mean_down_time,
+    compute_mean_fault_notification_time,
     compute_mean_recovery_time,
+    compute_mean_time_to_failure,
+    compute_memory_utilization,
+    compute_response_time_p95,
     compute_system_availability,
     partition_by_scope,
     resolve_fault_window,
@@ -34,6 +50,25 @@ from app.tasks.shared import task_session
 
 logger = logging.getLogger(__name__)
 
+_AVAILABILITY_SIGNALS: list[tuple[str, str]] = [
+    ("probe_success",         _FV_AVAILABILITY_BLACKBOX_HTTP),
+    ("linkerd_success_rate",  _FV_AVAILABILITY_LINKERD),
+    ("kube_pod_status_ready", _FV_AVAILABILITY_POD_READY),
+]
+
+_PERFORMANCE_SIGNAL_NAMES: list[str] = [
+    "linkerd_response_latency_p95_ms",
+    "linkerd_error_rate",
+    "cadvisor_cpu_cores_used",
+    "container_memory_working_set_bytes",
+]
+
+_PERF_COMPUTE_MAP: dict[str, tuple[ISOIndicator, str, Any]] = {
+    "linkerd_response_latency_p95_ms": (ISOIndicator.RESPONSE_TIME_P95, _FV_RESPONSE_TIME_P95, compute_response_time_p95),
+    "linkerd_error_rate": (ISOIndicator.ERROR_RATE, _FV_ERROR_RATE, compute_error_rate),
+    "cadvisor_cpu_cores_used": (ISOIndicator.CPU_UTILIZATION, _FV_CPU_UTILIZATION, compute_cpu_utilization),
+    "container_memory_working_set_bytes": (ISOIndicator.MEMORY_UTILIZATION, _FV_MEMORY_UTILIZATION, compute_memory_utilization)
+}
 
 @celery_app.task(  # type: ignore[misc]
     bind=True,
@@ -69,6 +104,13 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
         )
         vm_client = await vm_client_factory.for_experiment(experiment_id)
 
+        catalog =  MetricCatalog.load_from_dir()
+        query_engine = MetricsQueryEngine(
+            client_factory=vm_client_factory,
+            catalog=catalog,
+            repo=sample_repo
+        )
+
         # Step 1 — resolve authoritative fault window from chaos-exporter
         try:
             windows = await resolve_fault_window(experiment, vm_client)
@@ -80,7 +122,6 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             await eval_repo.mark_failed(
                 experiment_id=experiment_id,
                 status_message=str(exc),
-                # Provide placeholder windows so NOT NULL columns are satisfied
                 baseline_start=datetime.now(UTC),
                 baseline_end=datetime.now(UTC),
                 fault_start=datetime.now(UTC),
@@ -90,7 +131,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             )
             raise
 
-        # Step 2 — guard: wait until recovery window has elapsed
+        # Step 2 wait for recovery window
         recovery_done_at = windows.recovery_end
         now = datetime.now(UTC)
         if now < recovery_done_at:
@@ -102,42 +143,33 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             await asyncio.sleep(wait)
 
         # Step 3 — fetch and persist raw samples for each phase
+        metric_names = [name for name, _ in _AVAILABILITY_SIGNALS] + _PERFORMANCE_SIGNAL_NAMES
         for phase, start, end in [
             (MetricPhase.BASELINE, windows.baseline_start, windows.baseline_end),
             (MetricPhase.FAULT,    windows.fault_start,    windows.fault_end),
             (MetricPhase.RECOVERY, windows.recovery_start, windows.recovery_end),
         ]:
-            await sample_repo.delete_for_experiment_phase(experiment_id, phase)
-
-        await _fetch_phase_samples(
-            experiment_id=experiment_id,
-            windows=windows,
-            vm_client=vm_client,
-            sample_repo=sample_repo,
-            namespace=experiment.target_namespace,
-        )
+            await query_engine.fetch_phase(
+                experiment_id=experiment_id,
+                phase=phase,
+                namespace=experiment.target_namespace,
+                start=start,
+                end=end,
+                metric_names=metric_names,
+                extra_params={"window": "30s"}
+            )
 
         # Step 4 — load samples from DB and compute indicators
-        baseline_samples = await sample_repo.list_by_experiment_phase(
-            experiment_id, MetricPhase.BASELINE, metric_name="probe_success"
-        )
-        fault_samples = await sample_repo.list_by_experiment_phase(
-            experiment_id, MetricPhase.FAULT, metric_name="probe_success"
-        )
-        recovery_samples = await sample_repo.list_by_experiment_phase(
-            experiment_id, MetricPhase.RECOVERY, metric_name="probe_success"
-        )
-
-        scopes_by_phase: dict[MetricPhase, dict[MeasurementScope, list[RawMetricSample]]] = {
-            MetricPhase.BASELINE: partition_by_scope(baseline_samples, experiment.target_label),
-            MetricPhase.FAULT:    partition_by_scope(fault_samples,    experiment.target_label),
-            MetricPhase.RECOVERY: partition_by_scope(recovery_samples, experiment.target_label),
-        }
+        all_samples: dict[str, dict[MetricPhase, list[RawMetricSample]]] = {}
+        for metric_name in metric_names:
+            all_samples[metric_name] = {
+                phase: await sample_repo.list_by_experiment_phase(
+                    experiment_id, phase, metric_name=metric_name
+                )
+                for phase in MetricPhase
+            }
 
         # Step 5 — upsert envelope
-        litmus_probe_pct = await _fetch_litmus_probe_percentage(
-            experiment.chaos_engine_name or "", vm_client
-        )
         eval_data = {
             "id": uuid.uuid4(),
             "experiment_id": experiment_id,
@@ -147,7 +179,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             "fault_end": windows.fault_end,
             "recovery_start": windows.recovery_start,
             "recovery_end": windows.recovery_end,
-            "litmus_probe_percentage": litmus_probe_pct,
+            "litmus_probe_percentage": _extract_litmus_probe_pct(experiment),
             "status": "SUCCESS",
             "evaluator_version": "v1",
         }
@@ -156,20 +188,65 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
         # Step 6 — compute and upsert indicator rows
         indicator_rows: list[dict[str, Any]] = []
 
+        for metric_name, fv_avail in _AVAILABILITY_SIGNALS:
+            definition = catalog.get(metric_name)
+            _compute_availability_for_signal(
+                evaluation_id=evaluation.id,
+                samples_by_phase=all_samples[metric_name],
+                target_label=experiment.target_label,
+                scope_label_key=definition.scope_label_key,
+                windows=windows,
+                formula_version_avail=fv_avail,
+                rows=indicator_rows
+            )
+
+        probe_scopes_by_phase = {
+            phase: partition_by_scope(
+                all_samples["probe_success"][phase],
+                experiment.target_label,
+                scope_label_key=catalog.get("probe_success").scope_label_key,
+            )
+            for phase in MetricPhase
+        }
+
         _compute_per_phase_indicators(
             evaluation_id=evaluation.id,
-            scopes_by_phase=scopes_by_phase,
+            scopes_by_phase=probe_scopes_by_phase,
+            windows=windows,
+            rows=indicator_rows,
+        )
+        _compute_mrt(
+            evaluation_id=evaluation.id,
+            fault_samples=probe_scopes_by_phase[MetricPhase.FAULT],
+            recovery_samples=probe_scopes_by_phase[MetricPhase.RECOVERY],
+            fault_end=windows.fault_end,
+            rows=indicator_rows,
+        )
+
+        _compute_mttf(
+            evaluation_id=evaluation.id,
+            scopes_by_phase=probe_scopes_by_phase,
             windows=windows,
             rows=indicator_rows,
         )
 
-        _compute_mrt(
+        _compute_mfnt(
             evaluation_id=evaluation.id,
-            fault_samples=scopes_by_phase[MetricPhase.FAULT],
-            recovery_samples=scopes_by_phase[MetricPhase.RECOVERY],
-            fault_end=windows.fault_end,
-            rows=indicator_rows,
+            fault_scopes=probe_scopes_by_phase[MetricPhase.FAULT],
+            chaos_injected_time=windows.fault_start,
+            rows=indicator_rows
         )
+
+        for signal_name in _PERFORMANCE_SIGNAL_NAMES:
+            definition = catalog.get(signal_name)
+            _compute_performance_indicators(
+                evaluation_id=evaluation.id,
+                signal_name=signal_name,
+                samples_by_phase=all_samples[signal_name],
+                target_label=experiment.target_label,
+                scope_label_key=definition.scope_label_key,
+                rows=indicator_rows
+            )
 
         inserted = await eval_repo.upsert_indicators(indicator_rows)
 
@@ -188,43 +265,6 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _fetch_phase_samples(
-    experiment_id: uuid.UUID,
-    windows: PhaseWindows,
-    vm_client: Any,  # noqa: ANN401
-    sample_repo: RawMetricSampleRepository,
-    namespace: str,
-) -> None:
-    """Query VM for probe_success across all three phase windows and persist to DB."""
-    from app.infrastructure.metrics.query_engine import parse_range_response
-
-    promql = f'probe_success{{job="blackbox-tcp",namespace="{namespace}"}}'
-
-    for phase, start, end in [
-        (MetricPhase.BASELINE, windows.baseline_start, windows.baseline_end),
-        (MetricPhase.FAULT,    windows.fault_start,    windows.fault_end),
-        (MetricPhase.RECOVERY, windows.recovery_start, windows.recovery_end),
-    ]:
-        resp = await vm_client.range_query(promql=promql, start=start, end=end, step="10s")
-        rows = [
-            {
-                "metric_name": "probe_success",
-                "source": "blackbox_exporter",
-                "labels": labels,
-                "timestamp": ts,
-                "value": value,
-                "experiment_id": experiment_id,
-                "phase": phase,
-            }
-            for labels, ts, value in parse_range_response(
-                resp=resp,
-                labels_to_keep=["instance", "job", "namespace", "service"],
-            )
-        ]
-        if rows:
-            await sample_repo.bulk_insert(rows)
-
-
 def _compute_per_phase_indicators(
     evaluation_id: uuid.UUID,
     scopes_by_phase: dict[MetricPhase, dict[MeasurementScope, list[RawMetricSample]]],
@@ -241,14 +281,6 @@ def _compute_per_phase_indicators(
         ws = phase_window_map[phase]
 
         for scope, samples in scope_map.items():
-            avail = compute_system_availability(samples, ws)
-            row = build_indicator_rows(
-                evaluation_id, ISOIndicator.SYSTEM_AVAILABILITY,
-                phase, scope, avail, _FV_SYSTEM_AVAILABILITY,
-            )
-            if row:
-                rows.append(row)
-
             mdt = compute_mean_down_time(samples)
             row = build_indicator_rows(
                 evaluation_id, ISOIndicator.MEAN_DOWN_TIME,
@@ -264,7 +296,6 @@ def _compute_per_phase_indicators(
             )
             if row:
                 rows.append(row)
-
 
 def _compute_mrt(
     evaluation_id: uuid.UUID,
@@ -286,16 +317,102 @@ def _compute_mrt(
         if row:
             rows.append(row)
 
+def _compute_mttf(
+    evaluation_id: uuid.UUID,
+    scopes_by_phase: dict[MetricPhase, dict[MeasurementScope, list[RawMetricSample]]],
+    windows: PhaseWindows,
+    rows: list[dict[str, Any]],
+) -> None:
+    for phase, phase_start in [
+        (MetricPhase.BASELINE, windows.baseline_start),
+        (MetricPhase.FAULT, windows.fault_start)
+    ]:
+        for scope, samples in scopes_by_phase.get(phase, {}).items():
+            result = compute_mean_time_to_failure(samples, phase_start)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.MEAN_TIME_TO_FAILURE,
+                phase, scope, result, _FV_MEAN_TIME_TO_FAILURE,
+            )
+            if row:
+                rows.append(row)
 
-async def _fetch_litmus_probe_percentage(
-    engine_name: str,
-    vm_client: Any,  # noqa: ANN401
-) -> float | None:
-    if not engine_name:
-        return None
+def _compute_mfnt(
+    evaluation_id: uuid.UUID,
+    fault_scopes: dict[MeasurementScope, list[RawMetricSample]],
+    chaos_injected_time: datetime,
+    rows: list[dict[str, Any]],
+) -> None:
+    for scope, samples in fault_scopes.items():
+        result = compute_mean_fault_notification_time(samples, chaos_injected_time)
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.MEAN_FAULT_NOTIFICATION_TIME,
+            MetricPhase.FAULT, scope, result, _FV_MEAN_FAULT_NOTIFICATION_TIME
+        )
+        if row:
+            rows.append(row)
+
+def _extract_litmus_probe_pct(experiment: Any) -> float | None: # noqa: ANN401
+    result = (experiment.result or {})
+
+    pct_str = (
+        result.get("status", {})
+            .get("experimentStatus", {})
+            .get("probeSuccessPercentage")
+    )
+
     try:
-        promql = f'litmuschaos_probe_success_percentage{{chaosengine_name="{engine_name}"}}'
-        resp = await vm_client.instant_query(promql)
-        return vm_client.extract_scalar(resp)
-    except Exception:
+        return float(pct_str) if pct_str is not None else None
+    except (TypeError, ValueError):
         return None
+
+def _compute_availability_for_signal(
+    evaluation_id: uuid.UUID,
+    samples_by_phase: dict[MetricPhase, list[RawMetricSample]],
+    target_label: str,
+    scope_label_key: str | None,
+    windows: PhaseWindows,
+    formula_version_avail: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    phase_window_map = {
+        MetricPhase.BASELINE: window_seconds(windows.baseline_start, windows.baseline_end),
+        MetricPhase.FAULT: window_seconds(windows.fault_start, windows.fault_end),
+        MetricPhase.RECOVERY: window_seconds(windows.recovery_start, windows.recovery_end)
+    }
+
+    scope_by_phase = {
+        phase: partition_by_scope(samples, target_label, scope_label_key)
+        for phase, samples in samples_by_phase.items()
+    }
+
+    for phase, scope_map in scope_by_phase.items():
+        ws = phase_window_map[phase]
+        for scope, samples in scope_map.items():
+            result = compute_system_availability(samples, ws)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.SYSTEM_AVAILABILITY,
+                phase, scope, result, formula_version_avail
+            )
+
+            if row:
+                rows.append(row)
+
+def _compute_performance_indicators(
+    evaluation_id: uuid.UUID,
+    signal_name: str,
+    samples_by_phase: dict[MetricPhase, list[RawMetricSample]],
+    target_label: str,
+    scope_label_key: str | None,
+    rows: list[dict[str, Any]],
+) -> None:
+    indicator, fv, compute_fn = _PERF_COMPUTE_MAP[signal_name]
+    for phase, samples in samples_by_phase.items():
+        scope_map = partition_by_scope(samples, target_label, scope_label_key)
+        for scope, scoped_samples in scope_map.items():
+            result = compute_fn(scoped_samples)
+            row = build_indicator_rows(
+                evaluation_id, indicator,
+                phase, scope, result, fv
+            )
+            if row:
+                rows.append(row)

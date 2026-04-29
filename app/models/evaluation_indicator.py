@@ -24,8 +24,45 @@ class ISOIndicator(enum.StrEnum):
     MEAN_DOWN_TIME = "MEAN_DOWN_TIME"             # RAv-2-G
     FAILURE_RATE = "FAILURE_RATE"                 # RMa-3-G
     MEAN_RECOVERY_TIME = "MEAN_RECOVERY_TIME"     # RRe-1-G
+    MEAN_TIME_TO_FAILURE = "MEAN_TIME_TO_FAILURE"
+    MEAN_FAULT_NOTIFICATION_TIME = "MEAN_FAULT_NOTIFICATION_TIME"
+    RESPONSE_TIME_P95 = "RESPONSE_TIME_P95"
+    ERROR_RATE = "ERROR_RATE"
+    CPU_UTILIZATION = "CPU_UTILIZATION"
+    MEMORY_UTILIZATION = "MEMORY_UTILIZATION"
 
+class ISOSubCharacteristics(enum.StrEnum):
+    FAULTLESSNESS = "FAULTLESSNESS"
+    AVAILABILITY = "AVAILABILITY"
+    FAULT_TOLERANCE = "FAULT_TOLERANCE"
+    RECOVERABILITY = "RECOVERABILITY"
 
+_AVAILABILITY_INDICATORS = frozenset({
+    ISOIndicator.SYSTEM_AVAILABILITY,
+    ISOIndicator.MEAN_DOWN_TIME
+})
+
+def derive_sub_characteristic(
+    indicator: ISOIndicator,
+    phase: str | None,
+) -> ISOSubCharacteristics:
+    if indicator == ISOIndicator.MEAN_RECOVERY_TIME:
+        return ISOSubCharacteristics.RECOVERABILITY
+    if indicator == ISOIndicator.MEAN_FAULT_NOTIFICATION_TIME:
+        return ISOSubCharacteristics.FAULT_TOLERANCE
+    if phase == "BASELINE":
+        return (
+            ISOSubCharacteristics.AVAILABILITY
+            if indicator in _AVAILABILITY_INDICATORS
+            else ISOSubCharacteristics.FAULTLESSNESS
+        )
+    if phase == "FAULT":
+        return ISOSubCharacteristics.FAULT_TOLERANCE
+    if phase == "RECOVERY":
+        return ISOSubCharacteristics.RECOVERABILITY
+
+    msg = f"Cannot derive sub_characteristic for ({indicator}, {phase})"
+    raise ValueError(msg)
 class MeasurementScope(enum.StrEnum):
     TARGET = "TARGET"
     PEER = "PEER"
@@ -47,6 +84,10 @@ class EvaluationIndicator(Base):
 
     indicator: Mapped[ISOIndicator] = mapped_column(Enum(ISOIndicator), nullable=False)
 
+    sub_characteristic: Mapped[ISOSubCharacteristics] = mapped_column(
+        Enum(ISOSubCharacteristics), nullable=False, index=True
+    )
+
     # Reuses the existing metricphase Postgres enum — create_type=False prevents recreation.
     # Nullable: MRT is computed across the fault→recovery boundary, not tied to a single phase.
     phase: Mapped[str | None] = mapped_column(
@@ -60,7 +101,6 @@ class EvaluationIndicator(Base):
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     episode_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    # String, not enum — formula versions accrete rapidly during research iterations.
     # e.g. "iso25023.rav1g.v1", "iso25023.rre1g.v1"
     formula_version: Mapped[str] = mapped_column(String(64), nullable=False)
 
@@ -84,3 +124,4 @@ class EvaluationIndicator(Base):
             name="uq_evaluation_indicator_dimensions",
         ),
     )
+

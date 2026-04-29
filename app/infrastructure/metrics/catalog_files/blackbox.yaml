@@ -2,11 +2,12 @@ metrics:
   - name: probe_success
     source: blackbox_exporter
     description: "Probe success flag (1 = success, 0 = failure)"
-    promql_template: 'probe_success{namespace="$ns", job="blackbox-tcp"}'
+    promql_template: 'probe_success{namespace="$ns", job="blackbox-http"}'
     unit: boolean
     value_type: gauge
     default_step: "5s"
     labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"
   - name: probe_duration_seconds
     source: blackbox_exporter
     description: "End-to-end probe duration"
@@ -15,3 +16,11 @@ metrics:
     value_type: gauge
     default_step: "5s"
     labels_to_keep: [namespace, service, instance]
+  - name: probe_http_status_code
+    source: blackbox_exporter
+    description: "Probe HTTP status code"
+    promql_template: 'probe_http_status_code{namespace="$ns"}'
+    unit: integer
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, job, service, instance]

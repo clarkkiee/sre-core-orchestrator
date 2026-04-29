@@ -31,6 +31,7 @@ class MetricDefinition:
     value_type: str
     default_step: str = "5s"
     labels_to_keep: tuple[str, ...] = ()
+    scope_label_key: str | None = None
 
     def render(self, params: dict[str, str]) -> str:
         """Render PromQL template"""
@@ -158,4 +159,5 @@ def _build_definition(raw: dict[str, Any], file_path: Path) -> MetricDefinition:
         value_type=value_type,
         default_step=raw.get("default_step", "5s"),
         labels_to_keep=tuple(labels_to_keep),
+        scope_label_key=raw.get("scope_label_key")
     )

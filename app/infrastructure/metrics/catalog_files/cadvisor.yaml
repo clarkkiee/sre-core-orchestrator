@@ -1,0 +1,26 @@
+metrics:
+  - name: container_cpu_usage_seconds_total
+    source: kubelet_cadvisor
+    promql_template: 'container_cpu_usage_seconds_total{namespace="$ns"}'
+    unit: counter
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, pod, container]
+    scope_label_key: "pod"
+  - name: container_memory_working_set_bytes
+    source: kubelet_cadvisor
+    promql_template: 'container_memory_working_set_bytes{namespace="$ns"}'
+    unit: gauge
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, pod, container]
+    scope_label_key: "pod"
+  - name: cadvisor_cpu_cores_used
+    source: kubelet_cadvisor
+    promql_template: 'rate(container_cpu_usage_seconds_total{namespace="$ns"}[$window])'
+    unit: counter
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, pod, container]
+    scope_label_key: "pod"
+    

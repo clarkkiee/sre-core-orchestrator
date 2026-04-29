@@ -6,3 +6,11 @@ metrics:
     value_type: counter
     default_step: "5s"
     labels_to_keep: [namespace, pod, container]
+  - name: kube_pod_status_ready
+    source: kube_state_metrics
+    promql_template: 'kube_pod_status_ready{namespace="$ns", condition="true"}'
+    unit: boolean
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, pod]
+    scope_label_key: "pod"

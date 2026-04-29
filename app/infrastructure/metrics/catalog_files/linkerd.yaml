@@ -15,3 +15,39 @@ metrics:
     value_type: histogram
     default_step: "5s"
     labels_to_keep: [namespace, deployment, le, direction]
+  - name: linkerd_success_rate
+    source: linkerd_proxy
+    description: "Linkerd success rate"
+    promql_template: >
+      sum(rate(response_total{namespace="$ns", direction="inbound", classification="success"}[$window])) by (deployment)
+      /
+      sum(rate(response_total{namespace="$ns", direction="inbound"}[$window])) by (deployment)
+    unit: ratio
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, deployment]
+    scope_label_key: "deployment"
+  - name: linkerd_response_latency_p95_ms
+    source: linkerd_proxy
+    promql_template: >
+      histogram_quantile(0.95,
+        sum(rate(response_latency_ms_bucket{namespace="$ns", direction="inbound"}[$window]))
+        by (le, deployment)
+      )
+    unit: histogram
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, deployment]
+    scope_label_key: "deployment"
+  - name: linkerd_error_rate
+    source: linkerd_proxy
+    promql_template: >
+      sum(rate(response_total{namespace="$ns", direction="inbound", classification="failure"}[$window])) by (deployment)
+      /
+      clamp_min(sum(rate(response_total{namespace="$ns", direction="inbound"}[$window])) by (deployment), 1)
+    unit: gauge
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, deployment]
+    scope_label_key: "deployment"
+       

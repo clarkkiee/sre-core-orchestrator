@@ -129,4 +129,5 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_clusters_kind_name"), table_name="clusters")
     op.drop_index(op.f("ix_clusters_expires_at"), table_name="clusters")
     op.drop_table("clusters")
+    op.execute("DROP TYPE IF EXISTS clusterstatus")
     # ### end Alembic commands ###

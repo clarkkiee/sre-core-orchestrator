@@ -7,7 +7,11 @@ from typing import Any
 
 from app.infrastructure.metrics.client import VictoriaMetricsClient
 from app.models.chaos import ChaosExperiment
-from app.models.evaluation_indicator import ISOIndicator, MeasurementScope
+from app.models.evaluation_indicator import (
+    ISOIndicator,
+    MeasurementScope,
+    derive_sub_characteristic,
+)
 from app.models.raw_metric_sample import MetricPhase, RawMetricSample
 
 logger = logging.getLogger(__name__)
@@ -15,12 +19,20 @@ logger = logging.getLogger(__name__)
 RECOVERY_WINDOW_SECONDS = 120
 
 # Formula version strings — bump when a formula changes so old rows coexist.
-_FV_SYSTEM_AVAILABILITY = "iso25023.rav1g.v1"
 _FV_MEAN_DOWN_TIME = "iso25023.rav2g.v1"
 _FV_FAILURE_RATE = "iso25023.rma3g.v1"
 _FV_MEAN_RECOVERY_TIME = "iso25023.rre1g.v1"
 
+_FV_AVAILABILITY_BLACKBOX_HTTP = "iso25010.availability.blackbox_http.v1"
+_FV_AVAILABILITY_LINKERD = "iso25010.availability.linkerd.v1"
+_FV_AVAILABILITY_POD_READY = "iso25010.availability.pod_ready.v1"
 
+_FV_MEAN_TIME_TO_FAILURE        = "iso25023.mttf.v1"
+_FV_MEAN_FAULT_NOTIFICATION_TIME = "iso25023.rft3g.v1"
+_FV_RESPONSE_TIME_P95           = "iso25023.ptb2g.v1"
+_FV_ERROR_RATE                  = "iso25010.error_rate.v1"
+_FV_CPU_UTILIZATION             = "iso25023.pru1g.v1"
+_FV_MEMORY_UTILIZATION          = "iso25023.pru2g.v1"
 class FaultWindowResolutionError(Exception):
     pass
 
@@ -266,6 +278,178 @@ def compute_mean_recovery_time(
         },
     }
 
+def compute_response_time_p95(
+    samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0,"extra": None}
+
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0,"extra": None}
+
+    mean_p95 = sum(values) / len(values)
+    peak_p95 = max(values)
+
+    return {
+        "value": round(mean_p95, 3),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "mean_ms": round(mean_p95, 3),
+            "peak_ms": round(peak_p95, 3)
+        }
+    }
+
+def compute_mean_time_to_failure(
+    samples: list[RawMetricSample],
+    phase_start: datetime
+) -> dict[str, Any]:
+    """MTTF: waktu dari phase_start ke first observed failure (probe_success=0)"""
+
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0,"extra": None}
+
+    sorted_samples = sorted(samples, key=lambda s: s.timestamp)
+    first_failure = next((s for s in sorted_samples if s.value == 0.0), None)
+
+    if first_failure is None:
+        return {
+            "value": None,
+            "sample_count": len(samples),
+            "episode_count": 0,
+            "extra": {
+                "note": "no_failure_in_phase"
+            }
+        }
+
+    mttf = max((first_failure.timestamp - phase_start).total_seconds(), 0.0)
+    return {
+        "value": round(mttf, 3),
+        "sample_count": len(samples),
+        "episode_count": 1,
+        "extra": {
+            "phase_start": phase_start.isoformat(),
+            "first_failure_at": first_failure.timestamp.isoformat()
+        }
+    }
+
+def compute_mean_fault_notification_time(
+    samples: list[RawMetricSample],
+    chaos_injected_time: datetime
+) -> dict[str, Any]:
+    """waktu dari chaos injection ke first DOWN signal teramati"""
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    sorted_samples = sorted(samples, key=lambda s: s.timestamp)
+    post_injection = [s for s in sorted_samples if s.timestamp >= chaos_injected_time]
+    first_down = next((s for s in post_injection if s.value == 0.0), None)
+
+    if first_down is None:
+        return {
+            "value": None,
+            "sample_count": len(samples),
+            "episode_count": 0,
+            "extra": {
+                "note": "no_down_after_injection"
+            }
+        }
+
+    mfnt = max((first_down.timestamp - chaos_injected_time).total_seconds(), 0.0)
+
+    return {
+        "value": round(mfnt, 3),
+        "sample_count": len(samples),
+        "episode_count": 1,
+        "extra": {
+            "chaos_injected_time": chaos_injected_time.isoformat(),
+            "first_down_at": first_down.timestamp.isoformat()
+        }
+    }
+
+def compute_error_rate(
+    samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    """Error rate: rerata rasio error dalam time window tertentu"""
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {
+            "value": None,
+            "sample_count": len(samples),
+            "episode_count": 0,
+            "extra": None
+        }
+
+    mean_rate = sum(values) / len(values)
+    peak_rate = max(values)
+
+    return {
+        "value": round(mean_rate, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "peak_error_rate": round(peak_rate, 6)
+        }
+    }
+
+
+def compute_cpu_utilization(
+    samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    """mean and peak penggunaan CPU dalam time window tertentu
+    samples berisi rate(container_cpu_usage_seconds_total[$window])_
+    """
+
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    values = [s.value for s in samples if s.value is not None and s.value >= 0]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+
+    mean_cores = sum(values) / len(values)
+    peak_cores = max(values)
+
+    return {
+        "value": round(mean_cores, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "mean_cores": round(mean_cores, 6),
+            "peak_cores": round(peak_cores, 6)
+        }
+    }
+
+def compute_memory_utilization(
+    samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    """mean and peak penggunaan memory dalam time window tertentu
+    samples berisi container_memory_working_set_bytes_
+    """
+
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    values = [s.value for s in samples if s.value is not None and s.value >= 0]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+
+    mean_bytes = sum(values) / len(values)
+    peak_bytes = max(values)
+
+    return {
+        "value": round(mean_bytes, 2),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "mean_bytes": round(mean_bytes, 2),
+            "peak_bytes": round(peak_bytes, 2)
+        }
+    }
 
 # ---------------------------------------------------------------------------
 # Scope partitioning
@@ -278,13 +462,30 @@ def _label_matches(labels: dict[str, str], target_label: str) -> bool:
     key, _, value = target_label.partition("=")
     return labels.get(key.strip()) == value.strip()
 
+def _matches_scope_key(
+    labels: dict[str, str],
+    scope_label_key: str,
+    target_value: str,
+) -> bool:
+    label_value = labels.get(scope_label_key, "")
+    if scope_label_key == "pod":
+        return label_value == target_value or label_value.startswith(f"{target_value}-")
+    return label_value == target_value
 
 def partition_by_scope(
     samples: list[RawMetricSample],
     target_label: str,
+    scope_label_key: str | None = None
 ) -> dict[MeasurementScope, list[RawMetricSample]]:
-    target = [s for s in samples if _label_matches(s.labels, target_label)]
-    peer = [s for s in samples if not _label_matches(s.labels, target_label)]
+    if scope_label_key:
+        _, _, target_value = target_label.partition("=")
+        target_value = target_value.strip()
+        target = [s for s in samples if _matches_scope_key(s.labels, scope_label_key, target_value)]
+    else:
+        target = [s for s in samples if _label_matches(s.labels, target_label)]
+
+    target_set = set(id(s) for s in target)
+    peer = [s for s in samples if id(s) not in target_set]
     return {
         MeasurementScope.TARGET: target,
         MeasurementScope.PEER: peer,
@@ -312,10 +513,6 @@ def window_seconds(start: datetime, end: datetime) -> float:
     return (end - start).total_seconds()
 
 
-# ---------------------------------------------------------------------------
-# Indicator → row builder
-# ---------------------------------------------------------------------------
-
 def build_indicator_rows(
     evaluation_id: Any,
     indicator: ISOIndicator,
@@ -327,9 +524,13 @@ def build_indicator_rows(
     """Return a dict suitable for inserting into evaluation_indicators, or None if value is None."""
     if result["value"] is None:
         return None
+
+    phase_value = phase.value if phase is not None else None
+
     return {
         "evaluation_id": evaluation_id,
         "indicator": indicator,
+        "sub_characteristic": derive_sub_characteristic(indicator, phase_value), 
         "phase": phase,
         "scope": scope,
         "value": result["value"],
