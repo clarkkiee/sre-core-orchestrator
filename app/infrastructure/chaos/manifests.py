@@ -32,30 +32,30 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "SEQUENCE": "parallel",
         },
     },
-    # "pod-cpu-hog": {
-    #     "args": "./experiments -name pod-cpu-hog",
-    #     "env": {
-    #         "TOTAL_CHAOS_DURATION": "120",
-    #         "CPU_CORES": "1",  # number of cores to stress
-    #         "CPU_LOAD": "100",  # CPU load percentage per core
-    #         "PODS_AFFECTED_PERC": "0",
-    #         "SEQUENCE": "parallel",
-    #         "CONTAINER_RUNTIME": "containerd",
-    #         "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
-    #     },
-    # },
-    # "pod-memory-hog": {
-    #     "args": "./experiments -name pod-memory-hog",
-    #     "env": {
-    #         "TOTAL_CHAOS_DURATION": "120",
-    #         "MEMORY_CONSUMPTION": "500",  # MB to consume per worker
-    #         "NUMBER_OF_WORKERS": "1",  # parallel stress workers
-    #         "PODS_AFFECTED_PERC": "0",
-    #         "SEQUENCE": "parallel",
-    #         "CONTAINER_RUNTIME": "containerd",
-    #         "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
-    #     },
-    # },
+    "pod-cpu-hog": {
+        "args": "./experiments -name pod-cpu-hog",
+        "env": {
+            "TOTAL_CHAOS_DURATION": "120",
+            "CPU_CORES": "1",  # number of cores to stress
+            "CPU_LOAD": "100",  # CPU load percentage per core
+            "PODS_AFFECTED_PERC": "0",
+            "SEQUENCE": "parallel",
+            "CONTAINER_RUNTIME": "containerd",
+            "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
+        },
+    },
+    "pod-memory-hog": {
+        "args": "./experiments -name pod-memory-hog",
+        "env": {
+            "TOTAL_CHAOS_DURATION": "120",
+            "MEMORY_CONSUMPTION": "500",  # MB to consume per worker
+            "NUMBER_OF_WORKERS": "1",  # parallel stress workers
+            "PODS_AFFECTED_PERC": "0",
+            "SEQUENCE": "parallel",
+            "CONTAINER_RUNTIME": "containerd",
+            "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
+        },
+    },
     "pod-network-latency": {
         "args": "./experiments -name pod-network-latency",
         "env": {
@@ -69,18 +69,18 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
         },
     },
-    # "pod-network-loss": {
-    #     "args": "./experiments -name pod-network-loss",
-    #     "env": {
-    #         "TOTAL_CHAOS_DURATION": "120",
-    #         "NETWORK_PACKET_LOSS_PERCENTAGE": "100",  # 0-100%
-    #         "NETWORK_INTERFACE": "eth0",
-    #         "PODS_AFFECTED_PERC": "0",
-    #         "SEQUENCE": "parallel",
-    #         "CONTAINER_RUNTIME": "containerd",
-    #         "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
-    #     },
-    # },
+    "pod-network-loss": {
+        "args": "./experiments -name pod-network-loss",
+        "env": {
+            "TOTAL_CHAOS_DURATION": "120",
+            "NETWORK_PACKET_LOSS_PERCENTAGE": "100",  # 0-100%
+            "NETWORK_INTERFACE": "eth0",
+            "PODS_AFFECTED_PERC": "0",
+            "SEQUENCE": "parallel",
+            "CONTAINER_RUNTIME": "containerd",
+            "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
+        },
+    },
 }
 
 
