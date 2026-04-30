@@ -8,9 +8,16 @@ metrics:
     labels_to_keep: [namespace, pod, container]
   - name: kube_pod_status_ready
     source: kube_state_metrics
-    promql_template: 'kube_pod_status_ready{namespace="$ns", condition="true"}'
+    description: "Workload-level pod readiness (any pod ready = workload ready)"
+    promql_template: >
+      max(
+        label_replace(
+          kube_pod_status_ready{namespace="$ns", condition="true"},
+          "workload", "$1", "pod", "^(.+)-[^-]+-[^-]+$"
+        )
+      ) by (workload)
     unit: boolean
     value_type: gauge
     default_step: "5s"
-    labels_to_keep: [namespace, pod]
-    scope_label_key: "pod"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"

@@ -23,7 +23,7 @@ _FV_MEAN_DOWN_TIME = "iso25023.rav2g.v1"
 _FV_FAILURE_RATE = "iso25023.rma3g.v1"
 _FV_MEAN_RECOVERY_TIME = "iso25023.rre1g.v1"
 
-_FV_AVAILABILITY_BLACKBOX_HTTP = "iso25010.availability.blackbox_http.v1"
+_FV_AVAILABILITY_BLACKBOX_TCP = "iso25010.availability.blackbox_tcp.v1"
 _FV_AVAILABILITY_LINKERD = "iso25010.availability.linkerd.v1"
 _FV_AVAILABILITY_POD_READY = "iso25010.availability.pod_ready.v1"
 
@@ -468,8 +468,14 @@ def _matches_scope_key(
     target_value: str,
 ) -> bool:
     label_value = labels.get(scope_label_key, "")
+    if not label_value:
+        return False
     if scope_label_key == "pod":
-        return label_value == target_value or label_value.startswith(f"{target_value}-")
+        k8s_pod_name_segments = 3
+        parts = label_value.rsplit("-", 2)
+        if len(parts) >= k8s_pod_name_segments:
+            return parts[0] == target_value
+        return label_value == target_value
     return label_value == target_value
 
 def partition_by_scope(

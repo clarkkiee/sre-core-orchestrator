@@ -16,7 +16,7 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.evaluation import EvaluationRepository
 from app.repositories.raw_metric_sample import RawMetricSampleRepository
 from app.services.evaluation import (
-    _FV_AVAILABILITY_BLACKBOX_HTTP,
+    _FV_AVAILABILITY_BLACKBOX_TCP,
     _FV_AVAILABILITY_LINKERD,
     _FV_AVAILABILITY_POD_READY,
     _FV_CPU_UTILIZATION,
@@ -51,7 +51,7 @@ from app.tasks.shared import task_session
 logger = logging.getLogger(__name__)
 
 _AVAILABILITY_SIGNALS: list[tuple[str, str]] = [
-    ("probe_success",         _FV_AVAILABILITY_BLACKBOX_HTTP),
+    ("probe_success",         _FV_AVAILABILITY_BLACKBOX_TCP),
     ("linkerd_success_rate",  _FV_AVAILABILITY_LINKERD),
     ("kube_pod_status_ready", _FV_AVAILABILITY_POD_READY),
 ]
