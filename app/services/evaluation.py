@@ -489,7 +489,6 @@ def partition_by_scope(
     return {
         MeasurementScope.TARGET: target,
         MeasurementScope.PEER: peer,
-        MeasurementScope.NAMESPACE_WIDE: samples,
     }
 
 
