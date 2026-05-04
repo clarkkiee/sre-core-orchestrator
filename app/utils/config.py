@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     LITMUS_VERSION: str = "3.27.0"
     LITMUS_RUNNER_IMAGE: str = "litmuschaos/go-runner:3.27.0"
 
+    PROBE_DEFAULT_SUCCESS_RATE_SLO: float = 0.95
+    PROBE_DEFAULT_DEGRADED_SUCCESS_RATE_SLO: float = 0.80
+    PROBE_DEFAULT_P99_RECOVERY_RATIO: float = 1.2
+    PROBE_DEFAULT_LIVENESS_TIMEOUT_S: int = 3
+    PRBOE_DEFAULT_LIVENESS_POLL: int = 5
+    PROBE_DEFAULT_RECOVERY_INITIAL_DELAY_S: int = 30
+    PROBE_DEFAULT_RECOVERY_RETRY: int = 3
+    PROBE_DEFAULT_RECOVERY_INTERVAL_S: int = 10
+    PROBE_DEFAULT_MEMORY_RESTART_MAX: int = 1
+
     @property
     def DATABASE_URL(self) -> str:  # noqa: N802
         """Construct async database URL."""

@@ -72,3 +72,8 @@ class ExperimentEvaluation(Base):
         back_populates="evaluation",
         cascade="all, delete-orphan",
     )
+    probe_results = relationship(
+        "ProbeResult",
+        back_populates="evaluation",
+        cascade="all, delete-orphan"
+    )

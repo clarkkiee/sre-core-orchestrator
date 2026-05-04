@@ -37,6 +37,12 @@ from app.models.observability import (  # noqa: E402
     ObservabilitySession,
     ReliabilityReport,
 )
+from app.models.probe_result import (  # noqa: E402
+    ProbeMode,
+    ProbeResult,
+    ProbeType,
+    ProbeVerdict,
+)
 from app.models.raw_metric_sample import (  # noqa: E402
     MetricPhase,
     RawMetricSample,
@@ -65,6 +71,10 @@ __all__ = [
     "MetricPhase",
     "MetricSnapshot",
     "ObservabilitySession",
+    "ProbeMode",
+    "ProbeResult",
+    "ProbeType",
+    "ProbeVerdict",
     "RawMetricSample",
     "ReliabilityReport",
     "User",
