@@ -1,0 +1,38 @@
+metrics:
+  - name: container_cpu_usage_seconds_total
+    source: kubelet_cadvisor
+    promql_template: 'container_cpu_usage_seconds_total{namespace="$ns"}'
+    unit: counter
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, pod, container]
+  - name: container_memory_working_set_bytes
+    source: kubelet_cadvisor
+    description: "Workload-level memory working set (sum across pods of a deployment)"
+    promql_template: >
+      sum(
+        label_replace(
+          container_memory_working_set_bytes{namespace="$ns", container!="", container!="POD"},
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+        )
+      ) by (workload)
+    unit: gauge
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"
+  - name: cadvisor_cpu_cores_used
+    source: kubelet_cadvisor
+    description: "Workload-level CPU cores used (sum across pods of a deployment)"
+    promql_template: >
+      sum(
+        label_replace(
+          rate(container_cpu_usage_seconds_total{namespace="$ns", container!="", container!="POD"}[$window]),
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+        )
+      ) by (workload)
+    unit: counter
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"

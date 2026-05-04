@@ -13,6 +13,7 @@ from app.tasks.cluster_tasks import (
     teardown_cluster_task,
 )
 from app.tasks.deployment_tasks import delete_deployment_task, deploy_application_task
+from app.tasks.evaluation_tasks import evaluate_experiment_task
 from app.tasks.observability_tasks import collect_metrics_task
 
 __all__ = [
@@ -20,9 +21,10 @@ __all__ = [
     "collect_metrics_task",
     "delete_deployment_task",
     "deploy_application_task",
+    "evaluate_experiment_task",
     "provision_cluster_task",
     "reconnect_cluster_task",
-    "run_chaos_campaign_task"
+    "run_chaos_campaign_task",
     "run_chaos_experiment_task",
     "teardown_cluster_task",
 ]

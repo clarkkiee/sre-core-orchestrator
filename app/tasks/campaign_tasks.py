@@ -17,7 +17,9 @@ from app.repositories.campaign import CampaignRepository
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.job import JobRepository
+from app.services.evaluation import RECOVERY_WINDOW_SECONDS
 from app.tasks.celery_config import celery_app
+from app.tasks.chaos_tasks import _fetch_chaos_injected_time
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
 
@@ -95,6 +97,7 @@ async def _run_single_experiment(  # noqa: PLR0913
     experiment: ChaosExperiment,
     litmus_name: str,
     session: Any,  # noqa: ANN401
+    vm_url: str | None = None,
 ) -> str:
     """Execute one chaos experiment and return the verdict.
 
@@ -106,6 +109,18 @@ async def _run_single_experiment(  # noqa: PLR0913
         raise ValueError(msg)
 
     try:
+        await chaos_repo.update(
+            experiment,
+            status=ChaosExperimentStatus.RUNNING,
+            started_at=datetime.now(UTC),
+        )
+
+        # BASELINE PHASE
+        baseline_start = datetime.now(UTC)
+        await asyncio.sleep(RECOVERY_WINDOW_SECONDS)
+        baseline_end = datetime.now(UTC)
+
+        # FAULT PHASE
         await litmus_manager.create_experiment(
             kubeconfig_content=kubeconfig,
             namespace=experiment.target_namespace,
@@ -114,12 +129,6 @@ async def _run_single_experiment(  # noqa: PLR0913
             app_label=experiment.target_label,
             duration=experiment.duration_seconds,
             configuration=experiment.configuration,
-        )
-
-        await chaos_repo.update(
-            experiment,
-            status=ChaosExperimentStatus.RUNNING,
-            started_at=datetime.now(UTC),
         )
         await session.commit()
 
@@ -132,17 +141,39 @@ async def _run_single_experiment(  # noqa: PLR0913
             timeout=timeout,
         )
 
+        # Capture chaos_injected_time immediately after fault completes,
+        # while the exporter still points at this engine.
+        logger.info("START FETCH CHAOS INJECTED TIME")
+        injected_time = await _fetch_chaos_injected_time(
+            vm_url=vm_url,
+            engine_name=engine_name,
+        )
+        logger.info("END FETCH CHAOS INJECTED TIME")
+
+        # RECOVERY PHASE
+        recovery_start = datetime.now(UTC)
+        await asyncio.sleep(RECOVERY_WINDOW_SECONDS)
+        recovery_end = datetime.now(UTC)
+
         verdict = (
             chaos_result.get("status", {})
             .get("experimentStatus", {})
             .get("verdict", "N/A")
         )
+
+        # Re-sync identity map after long sleeps (baseline + fault + recovery).
+        await session.refresh(experiment)
         await chaos_repo.update(
             experiment,
             result=chaos_result,
             status=ChaosExperimentStatus.COMPLETED,
             status_message=f"Verdict: {verdict}",
             completed_at=datetime.now(UTC),
+            chaos_injected_time=injected_time,
+            baseline_start=baseline_start.timestamp(),
+            baseline_end=baseline_end.timestamp(),
+            recovery_start=recovery_start.timestamp(),
+            recovery_end=recovery_end.timestamp(),
         )
         await session.commit()
 
@@ -159,7 +190,10 @@ async def _run_single_experiment(  # noqa: PLR0913
         await session.commit()
         return "Error"
     else:
-        return str(verdict)
+        from app.tasks.evaluation_tasks import evaluate_experiment_task  # noqa: PLC0415
+        evaluate_experiment_task.delay(str(experiment.id))
+        logger.info("Enqueued evaluation for experiment=%s", experiment.id)
+        return verdict
     finally:
         # Cleanup: delete the ChaosEngine CR regardless of outcome.
         try:
@@ -180,6 +214,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     session: Any,  # noqa: ANN401
     campaign: ChaosCampaign,
     kubeconfig: str,
+    vm_url: str | None = None,
 ) -> dict[str, str]:
     """Execute all campaign phases in order."""
     litmus_manager = LitmusChaosManager(
@@ -302,7 +337,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
 
             await job_repo.update(
                 job,
-                current_phase=f"EXECUTING:{litmus_name}:{service['name']}",
+                current_phase=f"BASELINE_WAIT:{litmus_name}:{service['name']}",
                 progress_percentage=10 + int(80 * completed / total),
             )
             await session.commit()
@@ -314,6 +349,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
                 experiment=experiment,
                 litmus_name=litmus_name,
                 session=session,
+                vm_url=vm_url,
             )
 
             completed += 1
@@ -390,6 +426,7 @@ async def _run_chaos_campaign(
                 session=session,
                 campaign=campaign,
                 kubeconfig=kubeconfig,
+                vm_url=cluster.victoriametrics_url,
             )
         except Exception as exc:
             await session.rollback()

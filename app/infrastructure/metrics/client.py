@@ -48,8 +48,14 @@ class VictoriaMetricsClient:
         except Exception as e:
             return False, f"Health check failed: {e}"
 
-    async def instant_query(self, promql: str) -> dict[str, Any]:
-        params = {"query": promql}
+    async def instant_query(
+        self,
+        promql: str,
+        at: datetime | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"query": promql}
+        if at is not None:
+            params["time"] = at.timestamp()
         return await self._request("/api/v1/query", params, promql)
 
     async def range_query(

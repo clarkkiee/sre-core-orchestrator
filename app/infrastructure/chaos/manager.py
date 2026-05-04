@@ -4,6 +4,8 @@ import os
 import tempfile
 from typing import Any
 
+import aiohttp
+import yaml
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client import ApiClient, ApiException, Configuration
 
@@ -16,6 +18,7 @@ from app.infrastructure.chaos.manifests import (
     EXPERIMENT_TEMPLATES,
     build_chaos_engine,
     build_chaos_experiment,
+    build_chaos_exporter,
     build_namespaced_litmuschaos_rbac,
 )
 
@@ -151,6 +154,13 @@ class LitmusChaosManager:
                 kubeconfig_path=kc,
             )
 
+            # Deploy chaos-exporter
+            for cex_manifest in build_chaos_exporter(namespace=_LITMUS_NS):
+                await self._run_kubectl_apply_stdin(
+                    kubeconfig_path=kc,
+                    manifest_yaml=yaml.safe_dump(cex_manifest)
+                )
+
             # Poll until chaos-operator-ce deployment is available
             elapsed = 0
             timeout = 120
@@ -186,13 +196,16 @@ class LitmusChaosManager:
 
         try:
             apps_v1 = client.AppsV1Api(api_client)
-            dep = await apps_v1.read_namespaced_deployment(
-                name="chaos-operator-ce", namespace=_LITMUS_NS
+            dep = await asyncio.wait_for(
+                apps_v1.read_namespaced_deployment(
+                    name="chaos-operator-ce", namespace=_LITMUS_NS
+                ),
+                timeout=15.0
             )
 
             available = dep.status.available_replicas or 0
 
-        except ApiException:
+        except (ApiException, aiohttp.ClientError, asyncio.TimeoutError):
             return False
         else:
             return bool(available)

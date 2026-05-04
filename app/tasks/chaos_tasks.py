@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.infrastructure.chaos.manager import LitmusChaosManager
+from app.infrastructure.metrics.client import VictoriaMetricsClient
 from app.models.chaos import ChaosExperiment, ChaosExperimentStatus, ExperimentType
 from app.models.cluster import Cluster
 from app.models.job import Job, JobStatus
@@ -15,6 +16,9 @@ from app.tasks.celery_config import celery_app
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
 
+# Imported at function call site to avoid circular import at module load time.
+# evaluate_experiment_task is enqueued only after COMPLETED status is committed.
+
 logger = logging.getLogger(__name__)
 
 _TYPE_TO_LITMUS_NAME: dict[ExperimentType, str] = {
@@ -24,6 +28,9 @@ _TYPE_TO_LITMUS_NAME: dict[ExperimentType, str] = {
     ExperimentType.POD_NETWORK_LATENCY: "pod-network-latency",
     ExperimentType.POD_NETWORK_LOSS: "pod-network-loss",
 }
+
+_INJECTED_TIME_POLL_TIMEOUT = 60.0
+_INJECTED_TIME_POLL_INTERVAL = 5.0
 
 # ---------------------------------------------------------------------------
 # Celery task entry point
@@ -177,6 +184,8 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             timeout=timeout,
         )
 
+        logger.info(chaos_result)
+
         # PHASE 5: RECORDING_RESULTS (90%)
         await job_repo.update(
             job,
@@ -188,12 +197,21 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             .get("experimentStatus", {})
             .get("verdict", "N/A")
         )
+
+        # Read chaos_injected_time NOW — while the exporter still points at this
+        # engine — to avoid the post-hoc gauge-overwrite race in evaluation.
+        injected_time = await _fetch_chaos_injected_time(
+            vm_url=cluster.victoriametrics_url,
+            engine_name=engine_name,
+        )
+
         await chaos_repo.update(
             experiment,
             result=chaos_result,
             status=ChaosExperimentStatus.COMPLETED,
             status_message=f"Verdict: {verdict}",
             completed_at=datetime.now(UTC),
+            chaos_injected_time=injected_time,
         )
         await session.commit()
 
@@ -213,6 +231,11 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             completed_at=datetime.now(UTC),
         )
         await session.commit()
+
+        # Enqueue out-of-band so a metrics backend issue never fails the experiment.
+        from app.tasks.evaluation_tasks import evaluate_experiment_task  # noqa: PLC0415
+        evaluate_experiment_task.delay(str(experiment.id))
+        logger.info("Enqueued evaluation for experiment=%s", experiment.id)
 
     except Exception as e:
         logger.exception("Chaos experiment %s failed", experiment.id)
@@ -276,3 +299,48 @@ async def _run_chaos_experiment(experiment_id: str, job_id: str) -> dict[str, st
 
         logger.info("Chaos Experiment %s running successfully", experiment_id)
         return result
+
+
+async def _fetch_chaos_injected_time(
+    vm_url: str | None,
+    engine_name: str,
+) -> float | None:
+    """Query VM for the live chaos_injected_time gauge while the engine is still active."""
+    if not vm_url or not engine_name:
+        return None
+
+    client = VictoriaMetricsClient(vm_url)
+    promql = (
+        f'litmuschaos_experiment_chaos_injected_time'
+        f'{{chaosengine_name="{engine_name}"}}'
+    )
+
+    deadline = asyncio.get_running_loop().time() + _INJECTED_TIME_POLL_TIMEOUT
+    attempt = 0
+
+    while True:
+        attempt += 1
+        try:
+            resp = await client.instant_query(promql)
+            value = client.extract_scalar(resp)
+            if value and value > 0:
+                logger.info(
+                    "Captured chaos_injected_time=%.0f for engine=%s on attempt=%d",
+                    value, engine_name, attempt,
+                )
+                return value
+        except Exception:
+            logger.warning(
+                "chaos_injected_time poll attempt=%d failed for engine=%s",
+                attempt, engine_name, exc_info=True,
+            )
+
+        if asyncio.get_running_loop().time() >= deadline:
+            logger.warning(
+                "chaos_injected_time not available within %.0fs for engine=%s "
+                "(attempts=%d) — relying on evaluation fallback",
+                _INJECTED_TIME_POLL_TIMEOUT, engine_name, attempt,
+            )
+            return None
+
+        await asyncio.sleep(_INJECTED_TIME_POLL_INTERVAL)

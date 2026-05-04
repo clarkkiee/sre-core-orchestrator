@@ -1,0 +1,80 @@
+metrics:
+  - name: response_total
+    source: linkerd_proxy
+    description: "Total responses by classification and direction"
+    promql_template: 'response_total{namespace="$ns"}'
+    unit: count
+    value_type: counter
+    default_step: "5s"
+    labels_to_keep: [namespace, pod, classification, direction]
+  - name: response_latency_ms_bucket
+    source: linkerd_proxy
+    description: "Response latency histogram buckets (ms)"
+    promql_template: 'response_latency_ms_bucket{namespace="$ns"}'
+    unit: count
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, pod, le, direction]
+  - name: linkerd_success_rate
+    source: linkerd_proxy
+    description: "Linkerd success rate aggregated to deployment via pod-name extraction"
+    promql_template: >
+      sum(
+        label_replace(
+          rate(response_total{namespace="$ns", direction="inbound", classification="success"}[$window]),
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+        )
+      ) by (workload)
+      /
+      sum(
+        label_replace(
+          rate(response_total{namespace="$ns", direction="inbound"}[$window]),
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+        )
+      ) by (workload)
+    unit: ratio
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"
+  - name: linkerd_response_latency_p99_ms
+    source: linkerd_proxy
+    description: "Response latency P99 aggregated to deployment via pod-name extraction"
+    promql_template: >
+      histogram_quantile(0.99,
+        sum(
+          label_replace(
+            rate(response_latency_ms_bucket{namespace="$ns", direction="inbound"}[$window]),
+            "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+          )
+        ) by (le, workload)
+      )
+    unit: histogram
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"
+  - name: linkerd_error_rate
+    source: linkerd_proxy
+    promql_template: >
+      sum(
+        label_replace(
+          rate(response_total{namespace="$ns", direction="inbound", classification="failure"}[$window]),
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+        )
+      ) by (workload)
+      /
+      clamp_min(
+        sum(
+          label_replace(
+            rate(response_total{namespace="$ns", direction="inbound"}[$window]),
+            "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+          )
+        ) by (workload),
+        10e-6
+      )
+    unit: gauge
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"

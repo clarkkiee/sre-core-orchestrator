@@ -22,11 +22,24 @@ from app.models.deployment import (  # noqa: E402
     DeploymentStatus,
     DeployStrategy,
 )
+from app.models.evaluation_indicator import (  # noqa: E402
+    EvaluationIndicator,
+    ISOIndicator,
+    MeasurementScope,
+)
+from app.models.experiment_evaluation import (  # noqa: E402
+    EvaluationStatus,
+    ExperimentEvaluation,
+)
 from app.models.job import Job, JobStatus, JobType  # noqa: E402
 from app.models.observability import (  # noqa: E402
     MetricSnapshot,
     ObservabilitySession,
     ReliabilityReport,
+)
+from app.models.raw_metric_sample import (  # noqa: E402
+    MetricPhase,
+    RawMetricSample,
 )
 from app.models.user import User  # noqa: E402
 
@@ -40,12 +53,19 @@ __all__ = [
     "DeployStrategy",
     "Deployment",
     "DeploymentStatus",
+    "EvaluationIndicator",
+    "EvaluationStatus",
+    "ExperimentEvaluation",
     "ExperimentType",
+    "ISOIndicator",
     "Job",
     "JobStatus",
     "JobType",
+    "MeasurementScope",
+    "MetricPhase",
     "MetricSnapshot",
     "ObservabilitySession",
+    "RawMetricSample",
     "ReliabilityReport",
     "User",
 ]
