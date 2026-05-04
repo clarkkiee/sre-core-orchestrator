@@ -19,6 +19,7 @@ from app.repositories.campaign import CampaignRepository
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
+from app.repositories.evaluation import EvaluationRepository
 from app.repositories.job import JobRepository
 from app.repositories.observability import ObservabilityRepository
 from app.repositories.raw_metric_sample import RawMetricSampleRepository
@@ -268,4 +269,12 @@ def get_metrics_query_engine(
 
 MetricsQueryEngineDep = Annotated[
     MetricsQueryEngine, Depends(get_metrics_query_engine)
+]
+
+# Evaluation Service
+def _get_evaluation_repository(db: DbSession) -> EvaluationRepository:
+    return EvaluationRepository(db)
+
+EvaluationRepositoryDep = Annotated[
+    EvaluationRepository, Depends(_get_evaluation_repository)
 ]

@@ -1,7 +1,6 @@
 """Evaluation service: fault window resolution and ISO/IEC 25023 indicator computation."""
 
 import logging
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,7 +19,6 @@ RECOVERY_WINDOW_SECONDS = 120
 
 # Formula version strings — bump when a formula changes so old rows coexist.
 _FV_MEAN_DOWN_TIME = "iso25023.rav2g.v1"
-_FV_FAILURE_RATE = "iso25023.rma3g.v1"
 _FV_MEAN_RECOVERY_TIME = "iso25023.rre1g.v1"
 
 _FV_AVAILABILITY_BLACKBOX_TCP = "iso25010.availability.blackbox_tcp.v1"
@@ -28,11 +26,15 @@ _FV_AVAILABILITY_LINKERD = "iso25010.availability.linkerd.v1"
 _FV_AVAILABILITY_POD_READY = "iso25010.availability.pod_ready.v1"
 
 _FV_MEAN_TIME_TO_FAILURE        = "iso25023.mttf.v1"
-_FV_MEAN_FAULT_NOTIFICATION_TIME = "iso25023.rft3g.v1"
-_FV_RESPONSE_TIME_P95           = "iso25023.ptb2g.v1"
+_FV_RESPONSE_TIME_P99           = "iso25023.ptb2g.p99.v1"
 _FV_ERROR_RATE                  = "iso25010.error_rate.v1"
 _FV_CPU_UTILIZATION             = "iso25023.pru1g.v1"
 _FV_MEMORY_UTILIZATION          = "iso25023.pru2g.v1"
+_FV_FAULT_TOLERANCE_RATIO       = "iso25010.fault_tolerance_ratio.linkerd.v1"
+_FV_AVAILABILITY_LINKERD_RATIO  = "iso25010.availability.linkerd_ratio.v1"
+_FV_SUCCESS_RATE_DEGRADATION = "iso25010.fault_tolerance.success_rate_ratio.v1"
+_FV_LATENCY_P99_DEGRADATION = "iso25010.fault_tolerance.latency_p99_ratio.v1"
+
 class FaultWindowResolutionError(Exception):
     pass
 
@@ -170,7 +172,6 @@ def compute_system_availability(
         "extra": {"step_seconds": step},
     }
 
-
 def compute_mean_down_time(
     samples: list[RawMetricSample],
 ) -> dict[str, Any]:
@@ -210,30 +211,13 @@ def compute_mean_down_time(
         "extra": {"step_seconds": step, "down_episodes": ep_serialized},
     }
 
-
-def compute_failure_rate(
-    samples: list[RawMetricSample],
-    window_seconds: float,
-) -> dict[str, Any]:
-    """RMa-3-G: X = N_failures / observation_duration."""
-    if not samples or window_seconds == 0:
-        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
-
-    episodes = _detect_episodes(samples)
-    rate = len(episodes) / window_seconds
-
-    return {
-        "value": round(rate, 6),
-        "sample_count": len(samples),
-        "episode_count": len(episodes),
-        "extra": {"window_seconds": window_seconds},
-    }
-
-
 def compute_mean_recovery_time(
     fault_samples: list[RawMetricSample],
     recovery_samples: list[RawMetricSample],
     fault_end: datetime,
+    recovery_threshold: float = 0.95,
+    baseline_reference: float = 1.0,
+    binary_signal: bool = False,
 ) -> dict[str, Any]:
     """RRe-1-G: X = Σ Aᵢ / n  where Aᵢ = time from fault_end to first UP in recovery.
 
@@ -244,7 +228,13 @@ def compute_mean_recovery_time(
     if not fault_samples:
         return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
 
-    episodes = _detect_episodes(fault_samples)
+    if binary_signal:
+        episodes = _detect_episodes(fault_samples)
+        effective_threshold = 1.0
+    else:
+        episodes = _detect_episodes_ratio(fault_samples, threshold=baseline_reference*recovery_threshold)
+        effective_threshold = baseline_reference * recovery_threshold
+
     if not episodes:
         return {
             "value": 0.0,
@@ -254,19 +244,17 @@ def compute_mean_recovery_time(
         }
 
     recovery_sorted = sorted(recovery_samples, key=lambda s: s.timestamp)
+
     t_recovered: datetime | None = next(
-        (s.timestamp for s in recovery_sorted if s.value == 1.0),
+        (s.timestamp for s in recovery_sorted if s.value is not None
+         and (s.value == 1.0 if binary_signal else s.value >= effective_threshold)),
         None,
     )
 
     if t_recovered is None:
-        if recovery_sorted:
-            t_recovered = recovery_sorted[-1].timestamp
-        else:
-            t_recovered = fault_end
+        t_recovered = recovery_sorted[-1].timestamp if recovery_sorted else fault_end
 
-    mrt = (t_recovered - fault_end).total_seconds()
-    mrt = max(mrt, 0.0)
+    mrt = max((t_recovered - fault_end).total_seconds(), 0.0)
 
     return {
         "value": round(mrt, 3),
@@ -275,10 +263,33 @@ def compute_mean_recovery_time(
         "extra": {
             "fault_end": fault_end.isoformat(),
             "t_recovered": t_recovered.isoformat(),
+            "effective_threshold": round(effective_threshold, 6),
+            "baseline_reference":  round(baseline_reference, 6),
         },
     }
 
-def compute_response_time_p95(
+def _detect_episodes_ratio(
+    samples: list[RawMetricSample],
+    threshold: float = 0.95,
+) -> list[tuple[datetime, datetime]]:
+    episodes: list[tuple[datetime, datetime]] = []
+    ep_start: datetime | None = None
+
+    for s in samples:
+        is_degraded = s.value is not None and s.value < threshold
+
+        if is_degraded and ep_start is None:
+            ep_start = s.timestamp
+        elif not is_degraded and ep_start is not None:
+            episodes.append((ep_start, s.timestamp))
+            ep_start = None
+
+    if ep_start is not None and samples:
+        episodes.append((ep_start, samples[-1].timestamp))
+
+    return episodes
+
+def compute_response_time_p99(
     samples: list[RawMetricSample]
 ) -> dict[str, Any]:
     if not samples:
@@ -288,16 +299,16 @@ def compute_response_time_p95(
     if not values:
         return {"value": None, "sample_count": len(samples), "episode_count": 0,"extra": None}
 
-    mean_p95 = sum(values) / len(values)
-    peak_p95 = max(values)
+    mean_p99 = sum(values) / len(values)
+    peak_p99 = max(values)
 
     return {
-        "value": round(mean_p95, 3),
+        "value": round(mean_p99, 3),
         "sample_count": len(samples),
         "episode_count": 0,
         "extra": {
-            "mean_ms": round(mean_p95, 3),
-            "peak_ms": round(peak_p95, 3)
+            "mean_ms": round(mean_p99, 3),
+            "peak_ms": round(peak_p99, 3)
         }
     }
 
@@ -334,40 +345,6 @@ def compute_mean_time_to_failure(
         }
     }
 
-def compute_mean_fault_notification_time(
-    samples: list[RawMetricSample],
-    chaos_injected_time: datetime
-) -> dict[str, Any]:
-    """waktu dari chaos injection ke first DOWN signal teramati"""
-    if not samples:
-        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
-
-    sorted_samples = sorted(samples, key=lambda s: s.timestamp)
-    post_injection = [s for s in sorted_samples if s.timestamp >= chaos_injected_time]
-    first_down = next((s for s in post_injection if s.value == 0.0), None)
-
-    if first_down is None:
-        return {
-            "value": None,
-            "sample_count": len(samples),
-            "episode_count": 0,
-            "extra": {
-                "note": "no_down_after_injection"
-            }
-        }
-
-    mfnt = max((first_down.timestamp - chaos_injected_time).total_seconds(), 0.0)
-
-    return {
-        "value": round(mfnt, 3),
-        "sample_count": len(samples),
-        "episode_count": 1,
-        "extra": {
-            "chaos_injected_time": chaos_injected_time.isoformat(),
-            "first_down_at": first_down.timestamp.isoformat()
-        }
-    }
-
 def compute_error_rate(
     samples: list[RawMetricSample]
 ) -> dict[str, Any]:
@@ -395,7 +372,6 @@ def compute_error_rate(
             "peak_error_rate": round(peak_rate, 6)
         }
     }
-
 
 def compute_cpu_utilization(
     samples: list[RawMetricSample]
@@ -425,7 +401,8 @@ def compute_cpu_utilization(
     }
 
 def compute_memory_utilization(
-    samples: list[RawMetricSample]
+    samples: list[RawMetricSample],
+    restart_samples: list[RawMetricSample] | None = None
 ) -> dict[str, Any]:
     """mean and peak penggunaan memory dalam time window tertentu
     samples berisi container_memory_working_set_bytes_
@@ -441,15 +418,165 @@ def compute_memory_utilization(
     mean_bytes = sum(values) / len(values)
     peak_bytes = max(values)
 
+    restart_count = (
+        sum(s.value for s in restart_samples if s.value is not None)
+        if restart_samples else 0
+    )
+
     return {
         "value": round(mean_bytes, 2),
         "sample_count": len(samples),
         "episode_count": 0,
         "extra": {
             "mean_bytes": round(mean_bytes, 2),
-            "peak_bytes": round(peak_bytes, 2)
+            "peak_bytes": round(peak_bytes, 2),
+            "restart_count": round(restart_count)
         }
     }
+
+def compute_availability_ratio(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """Request-based availability, berbeda dengan system availability yang time-based"""
+
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    values = [s.value for s in samples if s.value is not None and 0.0 <= s.value <= 1.0]
+
+    if not values:
+        return {
+            "value": None,
+            "sample_count": len(samples),
+            "episode_count": 0,
+            "extra": None
+        }
+
+    mean_av = sum(values) / len(values)
+
+    return {
+        "value": round(mean_av, 6),
+        "sample_count": len(values),
+        "episode_count": 0,
+        "extra": {"min_availability": round(min(values), 6)},
+    }
+
+def compute_fault_tolerance_ratio(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    baseline_values = [s.value for s in baseline_samples if s.value is not None]
+    fault_values = [s.value for s in fault_samples if s.value is not None]
+
+    if not baseline_values or not fault_values:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": None
+        }
+
+    sr_baseline = sum(baseline_values) / len(baseline_values)
+    sr_fault = sum(fault_values) / len(fault_values)
+
+    if sr_baseline == 0.0:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": {"note": "baseline_success_rate_zero"},
+        }
+
+    return {
+        "value": round(sr_fault / sr_baseline, 6),
+        "sample_count": len(baseline_samples) + len(fault_samples),
+        "episode_count": 0,
+        "extra": {
+            "sr_baseline": round(sr_baseline, 6),
+            "sr_fault": round(sr_fault, 6)
+        }
+    }
+
+def compute_success_rate_degradation(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    """(SR_baseline - SR_fault) / SR_baseline dari linkerd_success_rate"""
+
+    baseline_vals = [s.value for s in baseline_samples if s.value is not None]
+    fault_vals = [s.value for s in fault_samples if s.value is not None]
+
+    if not baseline_vals or not fault_vals:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": None
+        }
+
+    sr_baseline = sum(baseline_vals) / len(baseline_vals)
+    sr_fault = sum(fault_vals) / len(fault_vals)
+
+    if sr_baseline == 0.0:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": {
+                "note": "baseline_success_rate_zero"
+            }
+        }
+
+    return {
+        "value": round((sr_baseline - sr_fault) / sr_baseline, 6),
+        "sample_count": len(baseline_samples) + len(fault_samples),
+        "episode_count": 0,
+        "extra": {
+            "sr_baseline": round(sr_baseline, 6),
+            "sr_fault": round(sr_fault, 6)
+        }
+    }
+
+def compute_latency_p99_degradation(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    """P99_fault / P99_baseline dari linkerd_response_latency_p99_ms"""
+
+    baseline_vals = [s.value for s in baseline_samples if s.value is not None]
+    fault_vals = [s.value for s in fault_samples if s.value is not None]
+
+    if not baseline_vals or not fault_vals:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": None
+        }
+
+    p99_baseline = sum(baseline_vals) / len(baseline_vals)
+    p99_fault = sum(fault_vals) / len(fault_vals)
+
+    if p99_baseline == 0.0:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": {
+                "note": "baseline_p99_zero"
+            }
+        }
+
+    return {
+        "value": round((p99_fault - p99_baseline) / p99_baseline, 6),
+        "sample_count": len(baseline_samples) + len(fault_samples),
+        "episode_count": 0,
+        "extra": {
+            "p99_baseline": round(p99_baseline, 6),
+            "p99_fault": round(p99_fault, 6)
+        }
+    }
+
 
 # ---------------------------------------------------------------------------
 # Scope partitioning

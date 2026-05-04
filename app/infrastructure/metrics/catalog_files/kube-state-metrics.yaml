@@ -1,7 +1,7 @@
 metrics:
   - name: kube_pod_container_restarts_total
     source: kube_state_metrics
-    promql_template: 'kube_pod_container_restarts_total{namespace="$ns"}'
+    promql_template: 'sum(increase(kube_pod_container_restarts_total{namespace="$ns"}[$window])) by (pod)'
     unit: count
     value_type: counter
     default_step: "5s"
@@ -13,7 +13,7 @@ metrics:
       max(
         label_replace(
           kube_pod_status_ready{namespace="$ns", condition="true"},
-          "workload", "$1", "pod", "^(.+)-[^-]+-[^-]+$"
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
         )
       ) by (workload)
     unit: boolean

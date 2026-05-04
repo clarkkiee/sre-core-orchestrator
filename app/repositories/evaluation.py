@@ -5,9 +5,9 @@ from sqlalchemy import insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.evaluation_indicator import EvaluationIndicator
+from app.models.evaluation_indicator import EvaluationIndicator, MeasurementScope
 from app.models.experiment_evaluation import EvaluationStatus, ExperimentEvaluation
-
+from app.models.chaos import ChaosExperiment
 
 class EvaluationRepository:
     def __init__(self, db: AsyncSession) -> None:
@@ -94,3 +94,44 @@ class EvaluationRepository:
         )
         await self._db.execute(stmt)
         await self._db.commit()
+
+    async def get_with_indicators(
+        self,
+        experiment_id: uuid.UUID,
+        scope: MeasurementScope | None = None,
+    ) -> tuple[
+        ChaosExperiment | None,
+        ExperimentEvaluation | None,
+        list[EvaluationIndicator]
+    ]:
+        exp_stmt = select(ChaosExperiment).where(ChaosExperiment.id == experiment_id)
+        exp_result = await self._db.execute(exp_stmt)
+
+        experiment = exp_result.scalar_one_or_none()
+        if experiment is None:
+            return None, None, []
+
+        eval_stmt = select(ExperimentEvaluation).where(
+            ExperimentEvaluation.experiment_id == experiment_id
+        )
+        eval_result = await self._db.execute(eval_stmt)
+
+        evaluation = eval_result.scalar_one_or_none()
+        if evaluation is None:
+            return experiment, None, []
+
+        indicators_stmt = select(EvaluationIndicator).where(
+            EvaluationIndicator.evaluation_id == evaluation.id
+        )
+        if scope is not None:
+            indicators_stmt = indicators_stmt.where(EvaluationIndicator.scope == scope)
+
+        indicators_stmt = indicators_stmt.order_by(
+            EvaluationIndicator.phase,
+            EvaluationIndicator.indicator
+        )
+
+        indicators_result = await self._db.execute(indicators_stmt)
+        indicators = list(indicators_result.scalars().all())
+
+        return experiment, evaluation, indicators

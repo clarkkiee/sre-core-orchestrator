@@ -13,7 +13,7 @@ metrics:
       sum(
         label_replace(
           container_memory_working_set_bytes{namespace="$ns", container!="", container!="POD"},
-          "workload", "$1", "pod", "^(.+)-[^-]+-[^-]+$"
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
         )
       ) by (workload)
     unit: gauge
@@ -28,7 +28,7 @@ metrics:
       sum(
         label_replace(
           rate(container_cpu_usage_seconds_total{namespace="$ns", container!="", container!="POD"}[$window]),
-          "workload", "$1", "pod", "^(.+)-[^-]+-[^-]+$"
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
         )
       ) by (workload)
     unit: counter

@@ -22,14 +22,15 @@ from app.models import Base
 class ISOIndicator(enum.StrEnum):
     SYSTEM_AVAILABILITY = "SYSTEM_AVAILABILITY"  # RAv-1-G
     MEAN_DOWN_TIME = "MEAN_DOWN_TIME"             # RAv-2-G
-    FAILURE_RATE = "FAILURE_RATE"                 # RMa-3-G
     MEAN_RECOVERY_TIME = "MEAN_RECOVERY_TIME"     # RRe-1-G
-    MEAN_TIME_TO_FAILURE = "MEAN_TIME_TO_FAILURE"
-    MEAN_FAULT_NOTIFICATION_TIME = "MEAN_FAULT_NOTIFICATION_TIME"
-    RESPONSE_TIME_P95 = "RESPONSE_TIME_P95"
-    ERROR_RATE = "ERROR_RATE"
-    CPU_UTILIZATION = "CPU_UTILIZATION"
-    MEMORY_UTILIZATION = "MEMORY_UTILIZATION"
+    MEAN_TIME_TO_FAILURE  = "MEAN_TIME_TO_FAILURE"    # retained in enum, no new rows
+    RESPONSE_TIME_P99     = "RESPONSE_TIME_P99"       # replaces P95
+    ERROR_RATE            = "ERROR_RATE"
+    FAULT_TOLERANCE_RATIO = "FAULT_TOLERANCE_RATIO"   # cross-phase
+    CPU_UTILIZATION       = "CPU_UTILIZATION"
+    MEMORY_UTILIZATION    = "MEMORY_UTILIZATION"
+    SUCCESS_RATE_DEGRADATION = "SUCCESS_RATE_DEGRADATION"
+    LATENCY_P99_DEGRADATION = "LATENCY_P99_DEGRADATION"
 
 class ISOSubCharacteristics(enum.StrEnum):
     FAULTLESSNESS = "FAULTLESSNESS"
@@ -48,7 +49,11 @@ def derive_sub_characteristic(
 ) -> ISOSubCharacteristics:
     if indicator == ISOIndicator.MEAN_RECOVERY_TIME:
         return ISOSubCharacteristics.RECOVERABILITY
-    if indicator == ISOIndicator.MEAN_FAULT_NOTIFICATION_TIME:
+    if indicator == ISOIndicator.FAULT_TOLERANCE_RATIO:
+        return ISOSubCharacteristics.FAULT_TOLERANCE
+    if indicator == ISOIndicator.SUCCESS_RATE_DEGRADATION:
+        return ISOSubCharacteristics.FAULT_TOLERANCE
+    if indicator == ISOIndicator.LATENCY_P99_DEGRADATION:
         return ISOSubCharacteristics.FAULT_TOLERANCE
     if phase == "BASELINE":
         return (
