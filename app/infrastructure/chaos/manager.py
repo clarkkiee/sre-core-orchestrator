@@ -308,6 +308,7 @@ class LitmusChaosManager:
         experiment_type: str,
         duration: int,
         configuration: dict[str, Any] | None = None,
+        probes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         body = build_chaos_engine(
             app_label=app_label,
@@ -316,6 +317,7 @@ class LitmusChaosManager:
             experiment_type=experiment_type,
             namespace=namespace,
             configuration=configuration,
+            probes=probes,
         )
 
         api_client = await self._build_api_client(kubeconfig_content)
@@ -329,7 +331,12 @@ class LitmusChaosManager:
                 version=_LITMUS_CRD_VERSION,
                 plural="chaosengines",
             )
-            logger.info("ChaosEngine %s created in ns=%s", engine_name, namespace)
+            logger.info(
+                "ChaosEngine %s created in ns=%s with %d probe(s)",
+                engine_name,
+                namespace,
+                len(probes) if probes else 0,
+            )
             return result
         finally:
             await api_client.close()

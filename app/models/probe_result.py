@@ -108,7 +108,7 @@ class ProbeResult(Base):
         nullable=False
     )
 
-    evaluation = relationship("ExperimentEvaluatio", back_populates="probe_results")
+    evaluation = relationship("ExperimentEvaluation", back_populates="probe_results")
 
     __table_args__ = (
         UniqueConstraint(

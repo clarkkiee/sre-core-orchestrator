@@ -22,16 +22,16 @@ _DEFAULT_LITMUS_IMAGE = "litmuschaos/go-runner:3.27.0"
 
 
 EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
-    "pod-delete": {
-        "args": "./experiments -name pod-delete",
-        "env": {
-            "TOTAL_CHAOS_DURATION": "120",
-            "CHAOS_INTERVAL": "30",
-            "FORCE": "true",
-            "PODS_AFFECTED_PERC": "0",
-            "SEQUENCE": "parallel",
-        },
-    },
+    # "pod-delete": {
+    #     "args": "./experiments -name pod-delete",
+    #     "env": {
+    #         "TOTAL_CHAOS_DURATION": "120",
+    #         "CHAOS_INTERVAL": "30",
+    #         "FORCE": "true",
+    #         "PODS_AFFECTED_PERC": "0",
+    #         "SEQUENCE": "parallel",
+    #     },
+    # },
     "pod-cpu-hog": {
         "args": "./experiments -name pod-cpu-hog",
         "env": {
@@ -284,6 +284,10 @@ def build_chaos_experiment(
     }
 
 
+# Configuration keys consumed by other subsystems (e.g. probe builder) — not env vars.
+_RESERVED_CONFIG_KEYS = {"probes"}
+
+
 def _build_engine_env(
     experiment_type: str,
     duration: int,
@@ -294,13 +298,15 @@ def _build_engine_env(
     Merge order (highest priority last):
       1. Template defaults from EXPERIMENT_TEMPLATES
       2. Duration override
-      3. User-provided configuration overrides
+      3. User-provided configuration overrides (excluding _RESERVED_CONFIG_KEYS)
     """
     template = EXPERIMENT_TEMPLATES[experiment_type]
     env = dict(template["env"])
     env["TOTAL_CHAOS_DURATION"] = str(duration)
     if configuration:
         for key, value in configuration.items():
+            if key in _RESERVED_CONFIG_KEYS:
+                continue
             env[key] = str(value).lower() if isinstance(value, bool) else str(value)
     return [{"name": k, "value": v} for k, v in env.items()]
 
@@ -312,6 +318,7 @@ def build_chaos_engine(  # noqa: PLR0913
     experiment_type: str,
     duration: int,
     configuration: dict[str, Any] | None = None,
+    probes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return a ChaosEngine CR that triggers the experiment against the target app.
 
@@ -322,7 +329,21 @@ def build_chaos_engine(  # noqa: PLR0913
         experiment_type: Must match a ChaosExperiment CR name in the same namespace.
         duration:        Overrides TOTAL_CHAOS_DURATION (seconds).
         configuration:   Optional env-var overrides (e.g. TARGET_CONTAINER).
+        probes:          Optional list of Litmus probe specs. When provided, injected
+                         into experiments[0].spec.components.probe — used as a binary
+                         gate alongside built-in checks for ChaosResult verdict.
     """
+    components: dict[str, Any] = {
+        "env": _build_engine_env(experiment_type, duration, configuration),
+        "experimentAnnotations": {
+            "linkerd.io/inject": "disabled",
+        },
+    }
+
+    experiment_spec: dict[str, Any] = {"components": components}
+    if probes:
+        experiment_spec["probe"] = probes
+
     return {
         "apiVersion": "litmuschaos.io/v1alpha1",
         "kind": "ChaosEngine",
@@ -348,16 +369,7 @@ def build_chaos_engine(  # noqa: PLR0913
             "experiments": [
                 {
                     "name": experiment_type,
-                    "spec": {
-                        "components": {
-                            "env": _build_engine_env(
-                                experiment_type, duration, configuration
-                            ),
-                            "experimentAnnotations": {
-                                "linkerd.io/inject": "disabled",
-                            },
-                        }
-                    },
+                    "spec": experiment_spec,
                 }
             ],
         },

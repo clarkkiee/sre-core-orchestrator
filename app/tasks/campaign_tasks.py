@@ -10,16 +10,22 @@ from app.infrastructure.chaos.manifests import (
     _NEEDS_RUNTIME_SOCKET,
     EXPERIMENT_TEMPLATES,
 )
+from app.infrastructure.chaos.probes import build_probes
 from app.models.campaign import CampaignStatus, ChaosCampaign
 from app.models.chaos import ChaosExperiment, ChaosExperimentStatus, ExperimentType
 from app.models.job import Job, JobStatus
 from app.repositories.campaign import CampaignRepository
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
+from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.services.evaluation import RECOVERY_WINDOW_SECONDS
 from app.tasks.celery_config import celery_app
-from app.tasks.chaos_tasks import _fetch_chaos_injected_time
+from app.tasks.chaos_tasks import (
+    _EOT_PROBE_ATTEMPT_TIMEOUT,
+    _PRE_CHAOS_OVERHEAD,
+    _fetch_chaos_injected_time,
+)
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
 
@@ -96,6 +102,9 @@ async def _run_single_experiment(  # noqa: PLR0913
     kubeconfig: str,
     experiment: ChaosExperiment,
     litmus_name: str,
+    target_port: int,
+    service_protocol: str,
+    target_clusterip: str,
     session: Any,  # noqa: ANN401
     vm_url: str | None = None,
 ) -> str:
@@ -120,6 +129,23 @@ async def _run_single_experiment(  # noqa: PLR0913
         await asyncio.sleep(RECOVERY_WINDOW_SECONDS)
         baseline_end = datetime.now(UTC)
 
+        deployment_repo = DeploymentRepository(session)
+        deployment = await deployment_repo.get_by_id(experiment.deployment_id)
+        probes = build_probes(
+            experiment_type=litmus_name,
+            namespace=experiment.target_namespace,
+            target_label=experiment.target_label,
+            target_port=target_port,
+            service_protocol=service_protocol,
+            target_clusterip=target_clusterip,
+            prom_url=vm_url,
+            settings=settings,
+            deployment_thresholds=(
+                deployment.probe_thresholds if deployment else None
+            ),
+            experiment_configuration=experiment.configuration,
+        )
+        
         # FAULT PHASE
         await litmus_manager.create_experiment(
             kubeconfig_content=kubeconfig,
@@ -129,10 +155,18 @@ async def _run_single_experiment(  # noqa: PLR0913
             app_label=experiment.target_label,
             duration=experiment.duration_seconds,
             configuration=experiment.configuration,
+            probes=probes,
         )
         await session.commit()
 
-        timeout = experiment.duration_seconds + 120
+        _eot_overhead = (
+            settings.PROBE_DEFAULT_RECOVERY_INITIAL_DELAY_S
+            + _EOT_PROBE_ATTEMPT_TIMEOUT
+            + settings.PROBE_DEFAULT_RECOVERY_RETRY * (
+                settings.PROBE_DEFAULT_RECOVERY_INTERVAL_S + _EOT_PROBE_ATTEMPT_TIMEOUT
+            )
+        )
+        timeout = experiment.duration_seconds + _eot_overhead + _PRE_CHAOS_OVERHEAD
         chaos_result = await litmus_manager.poll_experiment_result(
             kubeconfig_content=kubeconfig,
             engine_name=engine_name,
@@ -190,8 +224,8 @@ async def _run_single_experiment(  # noqa: PLR0913
         await session.commit()
         return "Error"
     else:
-        from app.tasks.evaluation_tasks import evaluate_experiment_task  # noqa: PLC0415
-        evaluate_experiment_task.delay(str(experiment.id))
+        # Enqueue evaluation via celery by task name to avoid static type issues
+        celery_app.send_task("app.tasks.evaluate_experiment", args=[str(experiment.id)])
         logger.info("Enqueued evaluation for experiment=%s", experiment.id)
         return verdict
     finally:
@@ -348,6 +382,9 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
                 kubeconfig=kubeconfig,
                 experiment=experiment,
                 litmus_name=litmus_name,
+                target_port=int(service["port"]),
+                service_protocol=str(service.get("protocol", "http")),
+                target_clusterip=str(service.get("clusterIP", "")),
                 session=session,
                 vm_url=vm_url,
             )
