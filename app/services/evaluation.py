@@ -15,7 +15,7 @@ from app.models.raw_metric_sample import MetricPhase, RawMetricSample
 
 logger = logging.getLogger(__name__)
 
-RECOVERY_WINDOW_SECONDS = 30
+EVALUATION_WINDOW_SECONDS = 120
 
 # Formula version strings — bump when a formula changes so old rows coexist.
 _FV_MEAN_DOWN_TIME = "iso25023.rav2g.v1"
@@ -54,7 +54,7 @@ class PhaseWindows:
         fault_start: datetime,
         fault_end: datetime,
     ) -> None:
-        delta = timedelta(seconds=RECOVERY_WINDOW_SECONDS)
+        delta = timedelta(seconds=EVALUATION_WINDOW_SECONDS)
         self.fault_start = fault_start
         self.fault_end = fault_end
         self.baseline_start = fault_start - delta

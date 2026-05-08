@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.infrastructure.chaos.discovery import discover_services
@@ -10,7 +10,12 @@ from app.infrastructure.chaos.manifests import (
     _NEEDS_RUNTIME_SOCKET,
     EXPERIMENT_TEMPLATES,
 )
-from app.infrastructure.chaos.probes import build_probes
+from app.infrastructure.chaos.probes import (
+    build_probes,
+    estimate_eot_probe_overhead_seconds,
+)
+from app.tasks.chaos_tasks import _fetch_chaos_injected_time
+from app.infrastructure.metrics.client import VictoriaMetricsClient
 from app.models.campaign import CampaignStatus, ChaosCampaign
 from app.models.chaos import ChaosExperiment, ChaosExperimentStatus, ExperimentType
 from app.models.job import Job, JobStatus
@@ -19,13 +24,9 @@ from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
-from app.services.evaluation import RECOVERY_WINDOW_SECONDS
+from app.services.evaluation import EVALUATION_WINDOW_SECONDS
 from app.tasks.celery_config import celery_app
-from app.tasks.chaos_tasks import (
-    _EOT_PROBE_ATTEMPT_TIMEOUT,
-    _PRE_CHAOS_OVERHEAD,
-    _fetch_chaos_injected_time,
-)
+from app.tasks.chaos_tasks import _POST_CHAOS_OVERHEAD, _PRE_CHAOS_OVERHEAD
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
 
@@ -61,13 +62,7 @@ def run_chaos_campaign_task(
     return asyncio.run(
         _run_chaos_campaign(campaign_id=campaign_id, job_id=job_id)
     )
-
-
-# ---------------------------------------------------------------------------
-# Async implementation
-# ---------------------------------------------------------------------------
-
-
+ 
 async def _record_campaign_failure(
     campaign_id: uuid.UUID,
     job_id: uuid.UUID,
@@ -102,11 +97,12 @@ async def _run_single_experiment(  # noqa: PLR0913
     kubeconfig: str,
     experiment: ChaosExperiment,
     litmus_name: str,
-    target_port: int,
+    target_port: str,
     service_protocol: str,
     target_clusterip: str,
     session: Any,  # noqa: ANN401
     vm_url: str | None = None,
+    health_path: str | None = None,
 ) -> str:
     """Execute one chaos experiment and return the verdict.
 
@@ -126,11 +122,14 @@ async def _run_single_experiment(  # noqa: PLR0913
 
         # BASELINE PHASE
         baseline_start = datetime.now(UTC)
-        await asyncio.sleep(RECOVERY_WINDOW_SECONDS)
         baseline_end = datetime.now(UTC)
 
         deployment_repo = DeploymentRepository(session)
         deployment = await deployment_repo.get_by_id(experiment.deployment_id)
+        deployment_thresholds = deployment.probe_thresholds if deployment and deployment.probe_thresholds else {}
+        if health_path:
+            deployment_thresholds["target_health_path"] = health_path
+
         probes = build_probes(
             experiment_type=litmus_name,
             namespace=experiment.target_namespace,
@@ -140,9 +139,7 @@ async def _run_single_experiment(  # noqa: PLR0913
             target_clusterip=target_clusterip,
             prom_url=vm_url,
             settings=settings,
-            deployment_thresholds=(
-                deployment.probe_thresholds if deployment else None
-            ),
+            deployment_thresholds=deployment_thresholds,
             experiment_configuration=experiment.configuration,
         )
         
@@ -159,14 +156,13 @@ async def _run_single_experiment(  # noqa: PLR0913
         )
         await session.commit()
 
-        _eot_overhead = (
-            settings.PROBE_DEFAULT_RECOVERY_INITIAL_DELAY_S
-            + _EOT_PROBE_ATTEMPT_TIMEOUT
-            + settings.PROBE_DEFAULT_RECOVERY_RETRY * (
-                settings.PROBE_DEFAULT_RECOVERY_INTERVAL_S + _EOT_PROBE_ATTEMPT_TIMEOUT
-            )
+        eot_overhead = estimate_eot_probe_overhead_seconds(probes)
+        timeout = (
+            experiment.duration_seconds
+            + eot_overhead
+            + _PRE_CHAOS_OVERHEAD
+            + _POST_CHAOS_OVERHEAD
         )
-        timeout = experiment.duration_seconds + _eot_overhead + _PRE_CHAOS_OVERHEAD
         chaos_result = await litmus_manager.poll_experiment_result(
             kubeconfig_content=kubeconfig,
             engine_name=engine_name,
@@ -175,8 +171,6 @@ async def _run_single_experiment(  # noqa: PLR0913
             timeout=timeout,
         )
 
-        # Capture chaos_injected_time immediately after fault completes,
-        # while the exporter still points at this engine.
         logger.info("START FETCH CHAOS INJECTED TIME")
         injected_time = await _fetch_chaos_injected_time(
             vm_url=vm_url,
@@ -184,10 +178,12 @@ async def _run_single_experiment(  # noqa: PLR0913
         )
         logger.info("END FETCH CHAOS INJECTED TIME")
 
-        # RECOVERY PHASE
-        recovery_start = datetime.now(UTC)
-        await asyncio.sleep(RECOVERY_WINDOW_SECONDS)
-        recovery_end = datetime.now(UTC)
+        # RECOVERY PHASE     
+        baseline_end = datetime.fromtimestamp(injected_time, tz=UTC)
+        baseline_start = baseline_end - timedelta(seconds=120)
+
+        recovery_start = datetime.fromtimestamp(injected_time, tz=UTC)
+        recovery_end = recovery_start + timedelta(seconds=120)
 
         verdict = (
             chaos_result.get("status", {})
@@ -195,7 +191,6 @@ async def _run_single_experiment(  # noqa: PLR0913
             .get("verdict", "N/A")
         )
 
-        # Re-sync identity map after long sleeps (baseline + fault + recovery).
         await session.refresh(experiment)
         await chaos_repo.update(
             experiment,
@@ -203,14 +198,12 @@ async def _run_single_experiment(  # noqa: PLR0913
             status=ChaosExperimentStatus.COMPLETED,
             status_message=f"Verdict: {verdict}",
             completed_at=datetime.now(UTC),
-            chaos_injected_time=injected_time,
             baseline_start=baseline_start.timestamp(),
             baseline_end=baseline_end.timestamp(),
             recovery_start=recovery_start.timestamp(),
             recovery_end=recovery_end.timestamp(),
         )
         await session.commit()
-
     except Exception as exc:
         logger.exception(
             "Experiment %s (%s) failed", experiment.id, litmus_name,
@@ -324,6 +317,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
         for service in services:
             # Check if campaign was stopped between experiments.
             await session.refresh(campaign)
+            # Jika campaign dihentikan, early stop
             if campaign.status == CampaignStatus.STOPPED:
                 logger.info("Campaign %s stopped by user", campaign.id)
                 await job_repo.update(
@@ -382,11 +376,14 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
                 kubeconfig=kubeconfig,
                 experiment=experiment,
                 litmus_name=litmus_name,
-                target_port=int(service["port"]),
+                target_port=str(
+                    service.get("port", settings.PROBE_DEFAULT_TARGET_PORT)
+                ),
                 service_protocol=str(service.get("protocol", "http")),
                 target_clusterip=str(service.get("clusterIP", "")),
                 session=session,
                 vm_url=vm_url,
+                health_path=service.get("health_path"),
             )
 
             completed += 1

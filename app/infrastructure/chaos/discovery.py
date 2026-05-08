@@ -67,6 +67,15 @@ def _find_app_container(containers: list[Any]) -> str | None:
     return None
 
 
+def _find_app_health_path(containers: list[Any]) -> str | None:
+    for container in containers:
+        if container.name not in _SIDECAR_CONTAINERS:
+            if container.liveness_probe and container.liveness_probe.http_get:
+                return str(container.liveness_probe.http_get.path)
+            if container.readiness_probe and container.readiness_probe.http_get:
+                return str(container.readiness_probe.http_get.path)
+    return None
+
 def _selector_matches(
     selector: dict[str, str] | None,
     labels: dict[str, str] | None,
@@ -175,6 +184,8 @@ async def discover_services(
                 )
                 continue
 
+            health_path = _find_app_health_path(containers)
+
             services.append(
                 {
                     "name": name,
@@ -183,6 +194,7 @@ async def discover_services(
                     "port": selected_service["port"],
                     "protocol": selected_service["protocol"],
                     "clusterIP": selected_service["clusterIP"],
+                    "health_path": health_path,
                 }
             )
 

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import uuid
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,6 +13,7 @@ from app.infrastructure.metrics.query_engine import MetricsQueryEngine
 from app.models.chaos import ChaosExperiment
 from app.models.evaluation_indicator import ISOIndicator, MeasurementScope
 from app.models.raw_metric_sample import MetricPhase, RawMetricSample
+from app.models.probe_result import ProbeResult
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.evaluation import EvaluationRepository
@@ -48,6 +50,7 @@ from app.services.evaluation import (
     window_seconds,
 )
 from app.tasks.celery_config import celery_app
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.tasks.shared import task_session
 
 logger = logging.getLogger(__name__)
@@ -84,6 +87,30 @@ _PERF_COMPUTE_MAP: dict[str, tuple[ISOIndicator, str, Any]] = {
     "cadvisor_cpu_cores_used": (
         ISOIndicator.CPU_UTILIZATION, _FV_CPU_UTILIZATION, compute_cpu_utilization,
     ),
+}
+
+_ACTUAL_VALUE_RE = re.compile(r"Actual value:\s*(.*?)(?:\.\s*Expected value:|$)")
+
+_PROBE_TYPE_MAP: dict[str, str] = {
+    "httpProbe": "HTTP",
+    "promProbe": "PROM",
+    "cmdProbe": "CMD",
+    "k8sProbe": "K8S"
+}
+
+_PROBE_MODE_MAP: dict[str, str] = {
+    "SOT": "SOT",
+    "EOT": "EOT",
+    "Continuous": "CONTINUOUS",
+    "OnChaos": "ON_CHAOS",
+    "Edge": "EDGE"
+}
+
+_PROBE_VERDICT_MAP: dict[str, str] = {
+    "Passed": "PASSED",
+    "Failed": "FAILED",
+    "NA": "NA",
+    "Awaited": "NA"
 }
 
 @celery_app.task(  # type: ignore[misc]
@@ -188,6 +215,13 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             "evaluator_version": "v1",
         }
         evaluation = await eval_repo.upsert_evaluation(eval_data)
+        
+        probe_rows = _extract_probe_results(experiment)
+        with open("probe_rows.log", "a") as f:
+            import json
+            f.write(json.dumps(probe_rows, indent=2) + "\n")
+        logger.info("Probe rows: %s", probe_rows)
+        await _upsert_probe_results(session, evaluation.id, probe_rows)
 
         # Step 6 — compute and upsert indicator rows
         indicator_rows: list[dict[str, Any]] = []
@@ -293,6 +327,12 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             scope_label_key=ws_definition.scope_label_key,
             rows=indicator_rows,
         )
+        
+        _compute_probe_derived_indicator(
+            evaluation_id=evaluation.id,
+            probe_rows=probe_rows,
+            rows=indicator_rows
+        )
 
         inserted = await eval_repo.upsert_indicators(indicator_rows)
 
@@ -395,6 +435,179 @@ def _extract_litmus_probe_pct(experiment: Any) -> float | None: # noqa: ANN401
         return float(pct_str) if pct_str is not None else None
     except (TypeError, ValueError):
         return None
+
+def _extract_probe_results(experiment: Any) -> list[dict[str, Any]]: # noqa: ANN401
+    probe_status = (
+        (experiment.result or {})
+        .get("status", {})
+        .get("probeStatuses") or []
+    )
+    
+    rows = []
+    for ps in probe_status:
+        status = ps.get("status", {})
+        description = status.get("description", "")
+        
+        m = _ACTUAL_VALUE_RE.search(description)
+        actual_value = m.group(1).strip() if m else None
+
+        rows.append({
+            "probe_name": ps.get("name", ""),
+            "probe_type": _PROBE_TYPE_MAP.get(ps.get("type", ""), "HTTP"),
+            "probe_mode": _PROBE_MODE_MAP.get(ps.get("mode", ""), "SOT"),
+            "verdict": _PROBE_VERDICT_MAP.get(status.get("verdict", "NA"), "NA"),
+            "actual_value": actual_value,
+            "description": description
+        })
+
+    return rows
+    
+async def _upsert_probe_results(
+    session: Any, # noqa: ANN401
+    evaluation_id: uuid.UUID,
+    probe_rows: list[dict[str, Any]],
+) -> None:
+    if not probe_rows:
+        return
+    
+    for row in probe_rows:
+        stmt = (
+            pg_insert(ProbeResult)
+            .values(
+                id=uuid.uuid4(),
+                evaluation_id=evaluation_id,
+                probe_name=row["probe_name"],
+                probe_type=row["probe_type"],
+                probe_mode=row["probe_mode"],
+                verdict=row["verdict"],
+                actual_value=row.get("actual_value"),
+                attempts=1,
+                spec={},
+                extra={
+                    "description": row.get("description", "")
+                }
+            )
+        ).on_conflict_do_update(
+            constraint="uq_probe_results_evaluation_probe",
+            set_={
+                "verdict": row["verdict"],
+                "actual_value": row.get("actual_value"),
+                "extra": {
+                    "description": row.get("description", "")
+                }
+            }
+        )
+        await session.execute(stmt)
+        
+    await session.flush()
+    
+def _compute_probe_derived_indicator(
+    evaluation_id: uuid.UUID,
+    probe_rows: list[dict[str, Any]],
+    rows: list[dict[str, Any]]
+) -> None:
+    by_name = {p["probe_name"]: p for p in probe_rows}
+    target: str | None = None
+    for role_suffix in ("-baseline-latency-p99", "-baseline-error-rate", "-fault-latency-p99"):
+        for name in by_name:
+            if name.endswith(role_suffix):
+                target = name[: -len(role_suffix)]
+                break
+        if target:
+            break
+    
+    if not target:
+        logger.warning("Could not identify target name from probe result")
+        return
+    
+    def _val(role: str) -> float | None:
+        p = by_name.get(f"{target}-{role}")
+        val = p.get("actual_value") if p else None
+        if val is not None:
+            try:
+                return float(val)
+            except ValueError:
+                pass
+        return None
+
+    baseline_latency_p99 = _val("baseline-latency-p99")
+    fault_latency_p99 = _val("fault-latency-p99")
+    recovery_latency_p99 = _val("recovery-latency-p99")
+    baseline_err = _val("baseline-error-rate")
+    fault_err = _val("fault-error-rate")
+    
+    scope = MeasurementScope.TARGET
+    fv = "probe-v1"
+    
+    # RESPONSE TIME P99
+    for phase_val, lp99 in [
+        (MetricPhase.BASELINE, baseline_latency_p99), 
+        (MetricPhase.FAULT, fault_latency_p99), 
+        (MetricPhase.RECOVERY, recovery_latency_p99), 
+    ]:
+        if lp99 is None:
+            continue
+
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.RESPONSE_TIME_P99,
+            phase_val, scope, {
+                "value": lp99,
+                "sample_count": 1,
+                "episode_count": 0
+            }, fv
+        )
+        
+        if row:
+            rows.append(row)
+            
+    # LATENCY P99 DEGRAD
+    if baseline_latency_p99 and fault_latency_p99 and baseline_latency_p99 > 0:
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.LATENCY_P99_DEGRADATION,
+            None, scope, {
+                "value": fault_latency_p99 / baseline_latency_p99,
+                "sample_count": 1,
+                "episode_count": 0
+            }, fv
+        )
+    
+        if row:
+            rows.append(row)
+            
+    # ERROR RATE
+    for phase_val, er in [
+        (MetricPhase.BASELINE, baseline_err), 
+        (MetricPhase.FAULT, fault_err), 
+    ]:
+        if er is None:
+            continue
+
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.ERROR_RATE,
+            phase_val, scope, {
+                "value": er,
+                "sample_count": 1,
+                "episode_count": 0
+            }, fv
+        )
+        
+        if row:
+            rows.append(row)
+    
+    # SUCCESS RATE DEGRAD
+    if baseline_err is not None and fault_err is not None:
+        degradation = (1.0 - baseline_err) - (1.0 - fault_err)
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.SUCCESS_RATE_DEGRADATION,
+            None, scope, {
+                "value": degradation,
+                "sample_count": 1,
+                "episode_count": 0
+            }, fv
+        )
+        
+        if row:
+            rows.append(row)
 
 def _compute_availability_for_signal(
     evaluation_id: uuid.UUID,

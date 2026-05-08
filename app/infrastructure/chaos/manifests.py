@@ -22,16 +22,17 @@ _DEFAULT_LITMUS_IMAGE = "litmuschaos/go-runner:3.27.0"
 
 
 EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
-    # "pod-delete": {
-    #     "args": "./experiments -name pod-delete",
-    #     "env": {
-    #         "TOTAL_CHAOS_DURATION": "120",
-    #         "CHAOS_INTERVAL": "30",
-    #         "FORCE": "true",
-    #         "PODS_AFFECTED_PERC": "0",
-    #         "SEQUENCE": "parallel",
-    #     },
-    # },
+    "pod-delete": {
+        "args": "./experiments -name pod-delete",
+        "env": {
+            "TOTAL_CHAOS_DURATION": "120",
+            "CHAOS_INTERVAL": "30",
+            "FORCE": "true",
+            "PODS_AFFECTED_PERC": "0",
+            "SEQUENCE": "parallel",
+            "RAMP_TIME": "0",
+        },
+    },
     "pod-cpu-hog": {
         "args": "./experiments -name pod-cpu-hog",
         "env": {
@@ -42,6 +43,7 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
             "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
+            "RAMP_TIME":"0",
         },
     },
     "pod-memory-hog": {
@@ -54,6 +56,7 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
             "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
+            "RAMP_TIME":"0",
         },
     },
     "pod-network-latency": {
@@ -67,6 +70,7 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
             "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
+            "RAMP_TIME":"0",
         },
     },
     "pod-network-loss": {
@@ -79,6 +83,8 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
             "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
+          
+            "RAMP_TIME":"0",
         },
     },
 }

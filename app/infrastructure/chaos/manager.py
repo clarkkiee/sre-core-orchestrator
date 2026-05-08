@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import tempfile
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 import yaml
@@ -224,7 +224,7 @@ class LitmusChaosManager:
 
             sa = rbac_manifests[0]
             try:
-                await v1.create_namespaced_service_account(namespace=namespace, body=sa)
+                await v1.create_namespaced_service_account(namespace=namespace, body=sa) # pyright: ignore[reportArgumentType]
             except ApiException as e:
                 if e.status != _HTTP_CONFLICT:
                     raise
@@ -232,11 +232,11 @@ class LitmusChaosManager:
             # Apply Role (create or replace)
             role = rbac_manifests[1]
             try:
-                await rbac_v1.create_namespaced_role(namespace=namespace, body=role)
+                await rbac_v1.create_namespaced_role(namespace=namespace, body=role) # pyright: ignore[reportArgumentType]
             except ApiException as e:
                 if e.status == _HTTP_CONFLICT:
                     await rbac_v1.replace_namespaced_role(
-                        name=role["metadata"]["name"], namespace=namespace, body=role
+                        name=role["metadata"]["name"], namespace=namespace, body=role # pyright: ignore[reportArgumentType]
                     )
                 else:
                     raise
@@ -245,14 +245,14 @@ class LitmusChaosManager:
             role_binding = rbac_manifests[2]
             try:
                 await rbac_v1.create_namespaced_role_binding(
-                    namespace=namespace, body=role_binding
+                    namespace=namespace, body=role_binding # pyright: ignore[reportArgumentType]
                 )
             except ApiException as e:
                 if e.status == _HTTP_CONFLICT:
                     await rbac_v1.replace_namespaced_role_binding(
                         name=role_binding["metadata"]["name"],
                         namespace=namespace,
-                        body=role_binding,
+                        body=role_binding, # pyright: ignore[reportArgumentType]
                     )
                 else:
                     raise
@@ -373,7 +373,7 @@ class LitmusChaosManager:
                     )
 
                     if verdict and verdict != "Awaited":
-                        logger.info("ChaosResult %s verdict=%s", result_name, verdict)
+                        logger.info("ChaosResult %s COMPLETE with verdict=%s", result_name, verdict)
                         return result
 
                 except ApiException as e:

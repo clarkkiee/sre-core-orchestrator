@@ -34,7 +34,6 @@ class CampaignService:
     async def start_campaign(
         self, tenant_id: uuid.UUID, payload: StartCampaignRequest
     ) -> tuple[CampaignResponse, uuid.UUID]:
-        # Fetch deployment to derive target namespace
         deployment = await self.deployment_repository.get_by_id(payload.deployment_id)
         if not deployment:
             msg = f"Deployment {payload.deployment_id} not found"

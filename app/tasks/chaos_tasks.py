@@ -5,9 +5,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.infrastructure.chaos.manager import LitmusChaosManager
-from app.infrastructure.chaos.probes import build_probes
+from app.infrastructure.chaos.probes import build_probes, estimate_eot_probe_overhead_seconds
 from app.infrastructure.chaos.discovery import (
-    discover_services,
     resolve_service_target,
 )
 from app.infrastructure.metrics.client import VictoriaMetricsClient
@@ -22,9 +21,6 @@ from app.tasks.celery_config import celery_app
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
 
-# Imported at function call site to avoid circular import at module load time.
-# evaluate_experiment_task is enqueued only after COMPLETED status is committed.
-
 logger = logging.getLogger(__name__)
 
 _TYPE_TO_LITMUS_NAME: dict[ExperimentType, str] = {
@@ -38,11 +34,11 @@ _TYPE_TO_LITMUS_NAME: dict[ExperimentType, str] = {
 _INJECTED_TIME_POLL_TIMEOUT = 60.0
 _INJECTED_TIME_POLL_INTERVAL = 5.0
 
-# Worst-case per-attempt timeout for EOT probes (k8sProbe uses 10s; httpProbe/promProbe
-# use 5s — take the max so the formula stays safe across all probe types).
-_EOT_PROBE_ATTEMPT_TIMEOUT = 10
 # Runner pod scheduling + container startup + SOT probe execution.
 _PRE_CHAOS_OVERHEAD = 35
+# Safety margin on top of EOT overhead estimate to absorb scheduling jitter,
+# slow probe image pulls, and sequential EOT probe execution variance.
+_POST_CHAOS_OVERHEAD = 60
 
 # ---------------------------------------------------------------------------
 # Celery task entry point
@@ -173,21 +169,21 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             experiment_type=litmus_name,
             namespace=experiment.target_namespace,
             target_label=experiment.target_label,
-                target_port=(
-                    int(service_target["port"])
-                    if service_target and "port" in service_target
-                    else settings.PROBE_DEFAULT_TARGET_PORT
-                ),
-                service_protocol=(
-                    str(service_target.get("protocol", "http"))
-                    if service_target
-                    else "http"
-                ),
-                target_clusterip=(
-                    str(service_target.get("clusterIP", ""))
-                    if service_target
-                    else ""
-                ),
+            target_port=(
+                str(service_target["port"])
+                if service_target and "port" in service_target
+                else str(settings.PROBE_DEFAULT_TARGET_PORT)
+            ),
+            service_protocol=(
+                str(service_target.get("protocol", "http"))
+                if service_target
+                else "http"
+            ),
+            target_clusterip=(
+                str(service_target.get("clusterIP", ""))
+                if service_target
+                else ""
+            ),
             prom_url=cluster.victoriametrics_url,
             settings=settings,
             deployment_thresholds=(
@@ -221,14 +217,17 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
         )
         await session.commit()
 
-        _eot_overhead = (
-            settings.PROBE_DEFAULT_RECOVERY_INITIAL_DELAY_S
-            + _EOT_PROBE_ATTEMPT_TIMEOUT
-            + settings.PROBE_DEFAULT_RECOVERY_RETRY * (
-                settings.PROBE_DEFAULT_RECOVERY_INTERVAL_S + _EOT_PROBE_ATTEMPT_TIMEOUT
-            )
+        eot_overhead = estimate_eot_probe_overhead_seconds(probes)
+        timeout = experiment.duration_seconds + eot_overhead + _PRE_CHAOS_OVERHEAD + _POST_CHAOS_OVERHEAD
+        logger.info(
+            "Computed chaos timeout=%ss (duration=%ss, eot_overhead=%ss, pre_chaos_overhead=%ss, post_chaos_overhead=%ss, probes=%d)",
+            timeout,
+            experiment.duration_seconds,
+            eot_overhead,
+            _PRE_CHAOS_OVERHEAD,
+            _POST_CHAOS_OVERHEAD,
+            len(probes),
         )
-        timeout = experiment.duration_seconds + _eot_overhead + _PRE_CHAOS_OVERHEAD
         chaos_result = await litmus_manager.poll_experiment_result(
             kubeconfig_content=kubeconfig,
             engine_name=engine_name,
@@ -251,20 +250,12 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             .get("verdict", "N/A")
         )
 
-        # Read chaos_injected_time NOW — while the exporter still points at this
-        # engine — to avoid the post-hoc gauge-overwrite race in evaluation.
-        injected_time = await _fetch_chaos_injected_time(
-            vm_url=cluster.victoriametrics_url,
-            engine_name=engine_name,
-        )
-
         await chaos_repo.update(
             experiment,
             result=chaos_result,
             status=ChaosExperimentStatus.COMPLETED,
             status_message=f"Verdict: {verdict}",
             completed_at=datetime.now(UTC),
-            chaos_injected_time=injected_time,
         )
         await session.commit()
 
@@ -352,7 +343,6 @@ async def _run_chaos_experiment(experiment_id: str, job_id: str) -> dict[str, st
 
         logger.info("Chaos Experiment %s running successfully", experiment_id)
         return result
-
 
 async def _fetch_chaos_injected_time(
     vm_url: str | None,

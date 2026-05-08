@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     PROBE_DEFAULT_LIVENESS_TIMEOUT_S: int = 3
     PROBE_DEFAULT_LIVENESS_POLL_S: int = 5
     PROBE_DEFAULT_RECOVERY_INITIAL_DELAY_S: int = 30
-    PROBE_DEFAULT_RECOVERY_RETRY: int = 3
+    PROBE_DEFAULT_RECOVERY_RETRY: int = 9
     PROBE_DEFAULT_RECOVERY_INTERVAL_S: int = 10
     PROBE_DEFAULT_MEMORY_RESTART_MAX: int = 1
 
@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     PROBE_DEFAULT_P99_RECOVERY_THRESHOLD_MS: int = 1500
 
     # Linkerd PromQL rate window for success-rate / latency probes.
-    PROBE_DEFAULT_LINKERD_WINDOW: str = "30s"
+    PROBE_DEFAULT_LINKERD_WINDOW: str = "120s"
 
     # Container images for cmdProbe source-mode.
     PROBE_DEFAULT_CMD_PROBE_IMAGE: str = "curlimages/curl:8.6.0"

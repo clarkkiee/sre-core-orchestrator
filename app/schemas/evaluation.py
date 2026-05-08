@@ -12,6 +12,7 @@ _FV_SOURCE_MAP: dict[str, str] = {
     "blackbox_tcp": "blackbox_tcp",
     "linkerd":      "linkerd",
     "pod_ready":    "pod_ready",
+    "probe": "probe"
 }
 
 def _source_from_fv(formula_version: str) -> str:
@@ -58,7 +59,7 @@ class ExperimentSummaryResponse(BaseModel):
     target_namespace: str
     duration_seconds: int
     status: str
-    status_message: str
+    status_message: str | None
 
     model_config = {"from_attributes": True}
 

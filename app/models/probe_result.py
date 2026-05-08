@@ -78,6 +78,10 @@ class ProbeResult(Base):
     success_percentage: Mapped[float | None] = mapped_column(
         Float, nullable=True
     )
+    
+    actual_value: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )
 
     attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
