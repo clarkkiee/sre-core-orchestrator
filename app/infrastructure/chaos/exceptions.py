@@ -19,3 +19,11 @@ class LitmusDeployError(Exception):
 
 class LitmusChaosExperimentError(Exception):
     """Raised when any Chaos Experiment Injection or Exception fails"""
+
+class ClusterNotReadyError(Exception):
+    """Raised when the cluster fails to reach a ready state within the timeout"""
+    
+    def __init__(self, reason: str, elapsed_s: int) -> None:
+        self.reason = reason
+        self.elapsed_s = elapsed_s
+        super().__init__(f"Cluster not ready after {elapsed_s}s: {reason}")

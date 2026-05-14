@@ -97,11 +97,6 @@ class Deployment(Base):
     probe_thresholds: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,
         nullable=True,
-        comment=(
-            "Per-deployment SLO threshold overrides for Litmus probes. "
-            "Keys: success_rate_slo, p99_recovery_ratio, liveness_timeout_s, "
-            "memory_restart_max, etc. Falls back to global PROBE_DEFAULT_* settings."
-        ),
     )
 
     status: Mapped[DeploymentStatus] = mapped_column(

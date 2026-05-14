@@ -19,9 +19,12 @@ def _global_thresholds(settings: Settings) -> dict[str, Any]:
     return {
         "target_port": settings.PROBE_DEFAULT_TARGET_PORT,
         "target_health_path": settings.PROBE_DEFAULT_TARGET_HEALTH_PATH,
+        "p95_baseline_threshold_ms": settings.PROBE_DEFAULT_P95_BASELINE_THRESHOLD_MS,
+        "p95_recovery_threshold_ms": settings.PROBE_DEFAULT_P95_RECOVERY_THRESHOLD_MS,
         "p99_baseline_threshold_ms": settings.PROBE_DEFAULT_P99_BASELINE_THRESHOLD_MS,
         "p99_recovery_threshold_ms": settings.PROBE_DEFAULT_P99_RECOVERY_THRESHOLD_MS,
         "linkerd_window": settings.PROBE_DEFAULT_LINKERD_WINDOW,
+        "recovery_probe_window": settings.PROBE_DEFAULT_RECOVERY_PROBE_WINDOW,
         "liveness_timeout_s": settings.PROBE_DEFAULT_LIVENESS_TIMEOUT_S,
         "liveness_poll_s": settings.PROBE_DEFAULT_LIVENESS_POLL_S,
         "recovery_initial_delay_s": settings.PROBE_DEFAULT_RECOVERY_INITIAL_DELAY_S,
@@ -89,58 +92,6 @@ _SOT_TCP_BASELINE: dict[str, Any] = {
 }
 
 
-_SOT_PROM_P99_BASELINE: dict[str, Any] = {
-    "name": "${target_name}-baseline-latency-p99",
-    "type": "promProbe",
-    "mode": "SOT",
-    "runProperties": {
-        "probeTimeout": "5s",
-        "interval": "5s",
-        "retry": 1,
-        "stopOnFailure": False,
-    },
-    "promProbe/inputs": {
-        "endpoint": "${prom_url}",
-        "query": """
-            histogram_quantile(0.99, 
-                sum(
-                    rate(response_latency_ms_bucket{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+',direction='inbound'}[${linkerd_window}])
-                ) by (le)
-            ) or vector(0)
-        """.strip(),
-        "comparator": {
-            "type": "float",
-            "criteria": "<=",
-            "value": "${p99_baseline_threshold_ms}",
-        }
-    }
-}
-
-_SOT_PROM_ERROR_RATE_BASELINE: dict[str, Any] = {
-    "name": "${target_name}-baseline-error-rate",
-    "type": "promProbe",
-    "mode": "SOT",
-    "runProperties": {
-        "probeTimeout": "5s",
-        "interval": "5s",
-        "retry": 1,
-        "stopOnFailure": False,
-    },
-    "promProbe/inputs": {
-        "endpoint": "${prom_url}",
-        "query": """
-            (sum(rate(response_total{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+', direction='inbound', classification!='success'}[120s]))
-            /
-            sum(rate(response_total{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+', direction='inbound'}[120s]))) or vector(0)
-        """,
-        "comparator": {
-            "type": "float",
-            "criteria": "<=",
-            "value": "1.0"
-        }
-    }
-}
-
 _CONTINUOUS_HTTP_LIVENESS: dict[str, Any] = {
     "name": "${target_name}-fault-availability",
     "type": "httpProbe",
@@ -189,61 +140,16 @@ _CONTINUOUS_TCP_LIVENESS: dict[str, Any] = {
     }
 }
 
-_EOT_FAULT_LATENCY_P99: dict[str, Any] = {
-    "name": "${target_name}-fault-latency-p99",
-    "type": "promProbe",
-    "mode": "EOT",
-    "runProperties": {
-        "probeTimeout": "5s",
-        "interval": "5s",
-        "retry": 1,
-        "stopOnFailure": False,
-        "initialDelay": "0s",
-    },
-    "promProbe/inputs": {
-        "endpoint": "${prom_url}",
-        "query": """
-            histogram_quantile(
-                0.99,
-                sum(rate(response_latency_ms_bucket{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+', direction='inbound'}[120s])) by (le)
-            ) or vector(0)
-        """,
-        "comparator": {
-            "type": "float",
-            "criteria": "<=",
-            "value": "99999",
-        }
-    }
-}
+# NOTE: Fault-window EOT promProbes (e.g. ${target}-fault-latency-p99,
+# ${target}-fault-error-rate with 120s lookback) and the legacy 120s p99
+# recovery probe were removed. They duplicated the controller's manual
+# Prometheus collection but with sequential-execution drift, and their long
+# range queries inflated `estimate_eot_probe_overhead_seconds()` — pushing the
+# overall experiment timeout up without contributing accurate measurements.
+# Indicator math now lives entirely in the controller; probes only assert.
 
-_EOT_FAULT_ERROR_RATE: dict[str, Any] = {
-    "name": "${target_name}-fault-error-rate",
-    "type": "promProbe",
-    "mode": "EOT",
-    "runProperties": {
-        "probeTimeout": "5s",
-        "interval": "5s",
-        "retry": 1,
-        "initialDelay": "0s",
-        "stopOnFailure": False,
-    },
-    "promProbe/inputs": {
-        "endpoint": "${prom_url}",
-        "query": """
-            (sum(rate(response_total{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+', direction='inbound', classification!='success'}[120s]))
-            /
-            sum(rate(response_total{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+', direction='inbound'}[120s]))) or vector(0)
-        """,
-        "comparator": {
-            "type": "float",
-            "criteria": "<=",
-            "value": "99999",
-        }
-    }
-}
-
-_EOT_PROM_LATENCY_P99_RECOVERY: dict[str, Any] = {
-    "name": "${target_name}-recovery-latency-p99",
+_EOT_PROM_LATENCY_P95_RECOVERY: dict[str, Any] = {
+    "name": "${target_name}-recovery-latency-p95",
     "type": "promProbe",
     "mode": "EOT",
     "runProperties": {
@@ -255,16 +161,20 @@ _EOT_PROM_LATENCY_P99_RECOVERY: dict[str, Any] = {
     },
     "promProbe/inputs": {
         "endpoint": "${prom_url}",
+        # Short lookback (recovery_probe_window, default 30s) — semantic is
+        # "is the service *currently* healthy after recovery?", evaluated as a
+        # boolean SLO assertion. Cross-phase indicator math (degradation,
+        # baseline vs fault) is owned by the controller's manual collection.
         "query": """
             histogram_quantile(
-                0.99,
-                sum(rate(response_latency_ms_bucket{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+', direction='inbound'}[120s])) by (le)
+                0.95,
+                sum(rate(response_latency_ms_bucket{pod=~'${target_name}-[a-z0-9]+-[a-z0-9]+', direction='inbound'}[${recovery_probe_window}])) by (le)
             ) or vector(0)
         """,
         "comparator": {
             "type": "float",
             "criteria": "<=",
-            "value": "${p99_recovery_threshold_ms}",
+            "value": "${p95_recovery_threshold_ms}",
         }
     }
 }
@@ -413,26 +323,26 @@ _ONCHAOS_TCP_TARGET_UNREACHABLE: dict[str, Any] = {
 }
 
 
+# Probe templates (post-rescope):
+# - SOT: lightweight liveness only. Pre-fault SOT promProbes for p99/error-rate
+#   were removed — controller's manual collection covers baseline measurement.
+# - Continuous / OnChaos: instant signals during fault, no drift concern.
+# - EOT: ONE comparator per SLO category for boolean recovery validation
+#   (e.g. p95 recovery probe, HTTP/TCP recovery probe). Short 30s lookback so
+#   the answer reflects current state at probe time, not an anchored phase
+#   average — that's the controller's job.
 _BASE_HTTP = [
     _SOT_HTTP_BASELINE,
-    _SOT_PROM_P99_BASELINE,
-    _SOT_PROM_ERROR_RATE_BASELINE,
     _CONTINUOUS_HTTP_LIVENESS,
-    _EOT_FAULT_LATENCY_P99,
-    _EOT_FAULT_ERROR_RATE,
-    _EOT_PROM_LATENCY_P99_RECOVERY,
-    _EOT_HTTP_RECOVERY    
+    _EOT_PROM_LATENCY_P95_RECOVERY,
+    _EOT_HTTP_RECOVERY,
 ]
 
 _BASE_TCP = [
     _SOT_TCP_BASELINE,
-    _SOT_PROM_P99_BASELINE,
-    _SOT_PROM_ERROR_RATE_BASELINE,
     _CONTINUOUS_TCP_LIVENESS,
-    _EOT_FAULT_LATENCY_P99,
-    _EOT_FAULT_ERROR_RATE,
-    _EOT_PROM_LATENCY_P99_RECOVERY,
-    _EOT_TCP_RECOVERY
+    _EOT_PROM_LATENCY_P95_RECOVERY,
+    _EOT_TCP_RECOVERY,
 ]
 
 DEFAULT_PROBE_TEMPLATES: dict[str, list[dict[str, Any]]] = {
@@ -442,13 +352,9 @@ DEFAULT_PROBE_TEMPLATES: dict[str, list[dict[str, Any]]] = {
     "pod-network-latency": [*_BASE_HTTP],
     "pod-network-loss": [
         _SOT_HTTP_BASELINE,
-        _SOT_PROM_P99_BASELINE,
-        _SOT_PROM_ERROR_RATE_BASELINE,
         _ONCHAOS_CMD_TARGET_UNREACHABLE,
         _CONTINUOUS_HTTP_LIVENESS,
-        _EOT_FAULT_LATENCY_P99,
-        _EOT_FAULT_ERROR_RATE,
-        _EOT_PROM_LATENCY_P99_RECOVERY,
+        _EOT_PROM_LATENCY_P95_RECOVERY,
         _EOT_HTTP_RECOVERY,
     ]
 }
@@ -460,13 +366,9 @@ DEFAULT_TCP_PROBE_TEMPLATES: dict[str, list[dict[str, Any]]] = {
     "pod-network-latency": [*_BASE_TCP],
     "pod-network-loss": [
         _SOT_TCP_BASELINE,
-        _SOT_PROM_P99_BASELINE,
-        _SOT_PROM_ERROR_RATE_BASELINE,
         _ONCHAOS_TCP_TARGET_UNREACHABLE,
         _CONTINUOUS_TCP_LIVENESS,
-        _EOT_FAULT_LATENCY_P99,
-        _EOT_FAULT_ERROR_RATE,
-        _EOT_PROM_LATENCY_P99_RECOVERY,
+        _EOT_PROM_LATENCY_P95_RECOVERY,
         _EOT_TCP_RECOVERY,
     ]
 }

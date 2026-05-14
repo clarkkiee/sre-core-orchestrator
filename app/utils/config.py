@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # LitmusChaos
     LITMUS_VERSION: str = "3.27.0"
     LITMUS_RUNNER_IMAGE: str = "litmuschaos/go-runner:3.27.0"
+    
+    # Cluster Readiness
+    CLUSTER_READY_TIMEOUT_S: int = 60
+    CLUSTER_READY_INTERVAL_S: int = 5
+    CLUSTER_READY_REQUIRE_NO_ACTIVE_ENGINE: bool = True
 
     # Litmus Probe defaults (global fallback for SLO thresholds).
     # Resolution order: experiment.configuration["probes"]["thresholds"]
@@ -115,11 +120,14 @@ class Settings(BaseSettings):
     PROBE_DEFAULT_TARGET_HEALTH_PATH: str = "/healthz"
 
     # Absolute latency thresholds (ms) — used by promProbe SOT/EOT comparators.
+    PROBE_DEFAULT_P95_BASELINE_THRESHOLD_MS: int = 800
+    PROBE_DEFAULT_P95_RECOVERY_THRESHOLD_MS: int = 1200
     PROBE_DEFAULT_P99_BASELINE_THRESHOLD_MS: int = 1000
     PROBE_DEFAULT_P99_RECOVERY_THRESHOLD_MS: int = 1500
 
     # Linkerd PromQL rate window for success-rate / latency probes.
     PROBE_DEFAULT_LINKERD_WINDOW: str = "120s"
+    PROBE_DEFAULT_RECOVERY_PROBE_WINDOW: str = "30s"
 
     # Container images for cmdProbe source-mode.
     PROBE_DEFAULT_CMD_PROBE_IMAGE: str = "curlimages/curl:8.6.0"

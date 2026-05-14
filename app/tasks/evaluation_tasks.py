@@ -2,18 +2,20 @@
 
 import asyncio
 import logging
-import uuid
 import re
+import uuid
 from datetime import UTC, datetime
 from typing import Any
+
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.infrastructure.metrics.catalog import MetricCatalog
 from app.infrastructure.metrics.client_factory import VictoriaMetricsClientFactory
 from app.infrastructure.metrics.query_engine import MetricsQueryEngine
 from app.models.chaos import ChaosExperiment
 from app.models.evaluation_indicator import ISOIndicator, MeasurementScope
-from app.models.raw_metric_sample import MetricPhase, RawMetricSample
 from app.models.probe_result import ProbeResult
+from app.models.raw_metric_sample import MetricPhase, RawMetricSample
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.evaluation import EvaluationRepository
@@ -25,10 +27,12 @@ from app.services.evaluation import (
     _FV_CPU_UTILIZATION,
     _FV_ERROR_RATE,
     _FV_FAULT_TOLERANCE_RATIO,
+    _FV_LATENCY_P95_DEGRADATION,
     _FV_LATENCY_P99_DEGRADATION,
     _FV_MEAN_DOWN_TIME,
     _FV_MEAN_RECOVERY_TIME,
     _FV_MEMORY_UTILIZATION,
+    _FV_RESPONSE_TIME_P95,
     _FV_RESPONSE_TIME_P99,
     _FV_SUCCESS_RATE_DEGRADATION,
     FaultWindowResolutionError,
@@ -38,10 +42,12 @@ from app.services.evaluation import (
     compute_cpu_utilization,
     compute_error_rate,
     compute_fault_tolerance_ratio,
+    compute_latency_p95_degradation,
     compute_latency_p99_degradation,
     compute_mean_down_time,
     compute_mean_recovery_time,
     compute_memory_utilization,
+    compute_response_time_p95,
     compute_response_time_p99,
     compute_success_rate_degradation,
     compute_system_availability,
@@ -50,7 +56,6 @@ from app.services.evaluation import (
     window_seconds,
 )
 from app.tasks.celery_config import celery_app
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.tasks.shared import task_session
 
 logger = logging.getLogger(__name__)
@@ -65,6 +70,7 @@ _RATIO_AVAILABILITY_SIGNALS: list[tuple[str, str]] = [
 ]
 
 _PERFORMANCE_SIGNAL_NAMES: list[str] = [
+    "linkerd_response_latency_p95_ms",
     "linkerd_response_latency_p99_ms",
     "linkerd_error_rate",
     "cadvisor_cpu_cores_used",
@@ -76,6 +82,11 @@ _MEMORY_SIGNAL_NAMES: list[str] = [
 ]
 
 _PERF_COMPUTE_MAP: dict[str, tuple[ISOIndicator, str, Any]] = {
+    "linkerd_response_latency_p95_ms": (
+        ISOIndicator.RESPONSE_TIME_P95,
+        _FV_RESPONSE_TIME_P95,
+        compute_response_time_p95,
+    ),
     "linkerd_response_latency_p99_ms": (
         ISOIndicator.RESPONSE_TIME_P99,
         _FV_RESPONSE_TIME_P99,
@@ -89,6 +100,12 @@ _PERF_COMPUTE_MAP: dict[str, tuple[ISOIndicator, str, Any]] = {
     ),
 }
 
+# Probe.actual_value is INFORMATIONAL ONLY: extracted for audit/observability so
+# operators can compare "what the probe saw" vs the controller-computed indicator.
+# It is NOT a source of evaluation_indicators rows — Litmus probes execute
+# sequentially at EOT, so each promProbe's range query is anchored to its own
+# T_now and drifts from chaos_end. Use the manual collection path for any
+# accuracy-critical reporting.
 _ACTUAL_VALUE_RE = re.compile(r"Actual value:\s*(.*?)(?:\.\s*Expected value:|$)")
 
 _PROBE_TYPE_MAP: dict[str, str] = {
@@ -215,12 +232,8 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             "evaluator_version": "v1",
         }
         evaluation = await eval_repo.upsert_evaluation(eval_data)
-        
+
         probe_rows = _extract_probe_results(experiment)
-        with open("probe_rows.log", "a") as f:
-            import json
-            f.write(json.dumps(probe_rows, indent=2) + "\n")
-        logger.info("Probe rows: %s", probe_rows)
         await _upsert_probe_results(session, evaluation.id, probe_rows)
 
         # Step 6 — compute and upsert indicator rows
@@ -291,6 +304,23 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             fault_scopes=linkerd_scopes_by_phase[MetricPhase.FAULT]
         )
 
+        p95_def = catalog.get("linkerd_response_latency_p95_ms")
+        linkerd_latency_p95_scopes_by_phase = {
+            phase: partition_by_scope(
+                all_samples["linkerd_response_latency_p95_ms"][phase],
+                experiment.target_label,
+                scope_label_key=p95_def.scope_label_key
+            )
+            for phase in MetricPhase
+        }
+
+        _compute_latency_p95_degradation(
+            evaluation_id=evaluation.id,
+            baseline_scopes=linkerd_latency_p95_scopes_by_phase[MetricPhase.BASELINE],
+            fault_scopes=linkerd_latency_p95_scopes_by_phase[MetricPhase.FAULT],
+            rows=indicator_rows
+        )
+
         p99_def = catalog.get("linkerd_response_latency_p99_ms")
         linkerd_latency_p99_scopes_by_phase = {
             phase: partition_by_scope(
@@ -327,12 +357,12 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             scope_label_key=ws_definition.scope_label_key,
             rows=indicator_rows,
         )
-        
-        _compute_probe_derived_indicator(
-            evaluation_id=evaluation.id,
-            probe_rows=probe_rows,
-            rows=indicator_rows
-        )
+
+        # Probe-derived indicator path intentionally disabled: probe.actual_value
+        # suffers sequential-execution drift (each EOT promProbe queries from its
+        # own T_now, not chaos_end). All evaluation_indicators rows come from the
+        # controller's anchored manual collection above. Probe verdicts and
+        # actual_value are still persisted on probe_results for audit/observability.
 
         inserted = await eval_repo.upsert_indicators(indicator_rows)
 
@@ -451,12 +481,28 @@ def _extract_probe_results(experiment: Any) -> list[dict[str, Any]]: # noqa: ANN
         m = _ACTUAL_VALUE_RE.search(description)
         actual_value = m.group(1).strip() if m else None
 
+        probe_name = ps.get("name", "")
+        
+        # Map probe name → indicator for cross-reference dashboards.
+        # Informational only — does NOT drive evaluation_indicators rows.
+        linked_indicator = None
+        name_lower = probe_name.lower()
+        if "latency-p95" in name_lower:
+            linked_indicator = ISOIndicator.RESPONSE_TIME_P95
+        elif "latency-p99" in name_lower:
+            linked_indicator = ISOIndicator.RESPONSE_TIME_P99
+        elif "error-rate" in name_lower:
+            linked_indicator = ISOIndicator.ERROR_RATE
+        elif "availability" in name_lower:
+            linked_indicator = ISOIndicator.SYSTEM_AVAILABILITY
+
         rows.append({
-            "probe_name": ps.get("name", ""),
+            "probe_name": probe_name,
             "probe_type": _PROBE_TYPE_MAP.get(ps.get("type", ""), "HTTP"),
             "probe_mode": _PROBE_MODE_MAP.get(ps.get("mode", ""), "SOT"),
             "verdict": _PROBE_VERDICT_MAP.get(status.get("verdict", "NA"), "NA"),
             "actual_value": actual_value,
+            "linked_indicator": linked_indicator,
             "description": description
         })
 
@@ -481,6 +527,7 @@ async def _upsert_probe_results(
                 probe_mode=row["probe_mode"],
                 verdict=row["verdict"],
                 actual_value=row.get("actual_value"),
+                linked_indicator=row.get("linked_indicator"),
                 attempts=1,
                 spec={},
                 extra={
@@ -492,6 +539,7 @@ async def _upsert_probe_results(
             set_={
                 "verdict": row["verdict"],
                 "actual_value": row.get("actual_value"),
+                "linked_indicator": row.get("linked_indicator"),
                 "extra": {
                     "description": row.get("description", "")
                 }
@@ -501,114 +549,6 @@ async def _upsert_probe_results(
         
     await session.flush()
     
-def _compute_probe_derived_indicator(
-    evaluation_id: uuid.UUID,
-    probe_rows: list[dict[str, Any]],
-    rows: list[dict[str, Any]]
-) -> None:
-    by_name = {p["probe_name"]: p for p in probe_rows}
-    target: str | None = None
-    for role_suffix in ("-baseline-latency-p99", "-baseline-error-rate", "-fault-latency-p99"):
-        for name in by_name:
-            if name.endswith(role_suffix):
-                target = name[: -len(role_suffix)]
-                break
-        if target:
-            break
-    
-    if not target:
-        logger.warning("Could not identify target name from probe result")
-        return
-    
-    def _val(role: str) -> float | None:
-        p = by_name.get(f"{target}-{role}")
-        val = p.get("actual_value") if p else None
-        if val is not None:
-            try:
-                return float(val)
-            except ValueError:
-                pass
-        return None
-
-    baseline_latency_p99 = _val("baseline-latency-p99")
-    fault_latency_p99 = _val("fault-latency-p99")
-    recovery_latency_p99 = _val("recovery-latency-p99")
-    baseline_err = _val("baseline-error-rate")
-    fault_err = _val("fault-error-rate")
-    
-    scope = MeasurementScope.TARGET
-    fv = "probe-v1"
-    
-    # RESPONSE TIME P99
-    for phase_val, lp99 in [
-        (MetricPhase.BASELINE, baseline_latency_p99), 
-        (MetricPhase.FAULT, fault_latency_p99), 
-        (MetricPhase.RECOVERY, recovery_latency_p99), 
-    ]:
-        if lp99 is None:
-            continue
-
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.RESPONSE_TIME_P99,
-            phase_val, scope, {
-                "value": lp99,
-                "sample_count": 1,
-                "episode_count": 0
-            }, fv
-        )
-        
-        if row:
-            rows.append(row)
-            
-    # LATENCY P99 DEGRAD
-    if baseline_latency_p99 and fault_latency_p99 and baseline_latency_p99 > 0:
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.LATENCY_P99_DEGRADATION,
-            None, scope, {
-                "value": fault_latency_p99 / baseline_latency_p99,
-                "sample_count": 1,
-                "episode_count": 0
-            }, fv
-        )
-    
-        if row:
-            rows.append(row)
-            
-    # ERROR RATE
-    for phase_val, er in [
-        (MetricPhase.BASELINE, baseline_err), 
-        (MetricPhase.FAULT, fault_err), 
-    ]:
-        if er is None:
-            continue
-
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.ERROR_RATE,
-            phase_val, scope, {
-                "value": er,
-                "sample_count": 1,
-                "episode_count": 0
-            }, fv
-        )
-        
-        if row:
-            rows.append(row)
-    
-    # SUCCESS RATE DEGRAD
-    if baseline_err is not None and fault_err is not None:
-        degradation = (1.0 - baseline_err) - (1.0 - fault_err)
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.SUCCESS_RATE_DEGRADATION,
-            None, scope, {
-                "value": degradation,
-                "sample_count": 1,
-                "episode_count": 0
-            }, fv
-        )
-        
-        if row:
-            rows.append(row)
-
 def _compute_availability_for_signal(
     evaluation_id: uuid.UUID,
     samples_by_phase: dict[MetricPhase, list[RawMetricSample]],
@@ -743,6 +683,27 @@ def _compute_success_rate_degradation(
         row = build_indicator_rows(
             evaluation_id, ISOIndicator.SUCCESS_RATE_DEGRADATION,
             None, scope, result, _FV_SUCCESS_RATE_DEGRADATION
+        )
+
+        if row:
+            rows.append(row)
+
+def _compute_latency_p95_degradation(
+    evaluation_id: uuid.UUID,
+    baseline_scopes: dict[MeasurementScope, list[RawMetricSample]],
+    fault_scopes: dict[MeasurementScope, list[RawMetricSample]],
+    rows: list[dict[str, Any]]
+) -> None:
+
+    for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
+        result = compute_latency_p95_degradation(
+            baseline_samples=baseline_scopes.get(scope, []),
+            fault_samples=fault_scopes.get(scope, []),
+        )
+
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.LATENCY_P95_DEGRADATION,
+            None, scope, result, _FV_LATENCY_P95_DEGRADATION
         )
 
         if row:

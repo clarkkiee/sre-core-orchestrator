@@ -31,8 +31,10 @@ def _format_value(indicator: str, raw: float) -> tuple[float, str]:
             return round(raw, 6), "cores"
         case "MEMORY_UTILIZATION":
             return round(raw / (1024 ** 2), 2), "MB"
-        case "RESPONSE_TIME_P95":
+        case "RESPONSE_TIME_P95" | "RESPONSE_TIME_P99":
             return round(raw, 3), "ms"
+        case "LATENCY_P95_DEGRADATION" | "LATENCY_P99_DEGRADATION" | "SUCCESS_RATE_DEGRADATION" | "FAULT_TOLERANCE_RATIO":
+            return round(raw, 6), "ratio"
         case _:
             # MEAN_DOWN_TIME, MEAN_RECOVERY_TIME, MTTF = detik
             return round(raw, 3), "s"

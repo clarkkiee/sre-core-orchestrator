@@ -13,6 +13,7 @@ from app.infrastructure.chaos.exceptions import (
     LitmusChaosExperimentError,
     LitmusCommandError,
     LitmusDeployError,
+    ClusterNotReadyError,
 )
 from app.infrastructure.chaos.manifests import (
     EXPERIMENT_TEMPLATES,
@@ -414,3 +415,105 @@ class LitmusChaosManager:
 
         finally:
             await api_client.close()
+
+    async def ensure_cluster_ready(
+        self,
+        kubeconfig_content: str,
+        namespace: str,
+        target_label: str,
+        timeout_s: int,
+        interval_s: int,
+        require_no_active_engine: bool = True
+    ) -> None:
+        # check all nodes is ready, all pods matching target_label in namespace is ready
+        
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        last_reason = "unknown"
+        
+        while asyncio.get_event_loop().time() < deadline:
+            api_client = await self._build_api_client(kubeconfig_content)
+            
+            try:
+                # nodes ready check
+                core_v1 = client.CoreV1Api(api_client)
+                nodes = await asyncio.wait_for(core_v1.list_node(), timeout=10.0)
+                not_ready_nodes = [
+                    n.metadata.name
+                    for n in nodes.items
+                    if not any(
+                        c.type == "Ready" and c.status == "True"
+                        for c in (n.status.conditions or [])
+                    )
+                ]
+                
+                if not_ready_nodes:
+                    last_reason = f"nodes not ready: {not_ready_nodes}"
+                    await asyncio.sleep(interval_s)
+                    continue
+                
+                # target pods ready check
+                pods = await asyncio.wait_for(
+                    core_v1.list_namespaced_pod(
+                        namespace=namespace,
+                        label_selector=target_label
+                    ),
+                    timeout=10.0
+                )
+                if not pods.items:
+                    last_reason = f"no pods matching label: '{target_label}'"
+                    await asyncio.sleep(interval_s)
+                    continue
+                
+                not_ready_pods = [
+                    p.metadata.name
+                    for p in pods.items
+                    if not any(
+                        c.type == "Ready" and c.status == "True"
+                        for c in (p.status.conditions or [])
+                    )
+                ]
+                
+                if not_ready_nodes:
+                    last_reason = f"pods not ready: {not_ready_pods}"
+                    await asyncio.sleep(interval_s)
+                    continue
+                
+                
+                # no active chaos engine
+                if require_no_active_engine:
+                    custom = client.CustomObjectsApi(api_client)
+                    engines = await asyncio.wait_for(
+                        custom.get_namespaced_custom_object(
+                            group=_LITMUS_CRD_GROUP,
+                            version=_LITMUS_CRD_VERSION,
+                            namespace=namespace,
+                            plural="chaosengines"
+                        ), # type: ignore
+                        timeout=10.0
+                    )
+                    
+                    active = [
+                        e["metadata"]["name"]
+                        for e in engines.get("items", [])
+                        if e.get("status", {}).get("engineStatus")
+                        not in (None, "completed", "stopped")
+                    ]
+                    
+                    if active:
+                        last_reason = f"Active ChaoEngines: {active}"
+                        await asyncio.sleep(interval_s)
+                        continue
+                
+                logger.info(
+                    "Cluster ready: namespace=%s target_label=%s",
+                    namespace, target_label
+                )
+                return
+
+            except (ApiException, aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_reason = f"API error: {e}"
+                await asyncio.sleep(interval_s)
+            finally:
+                await api_client.close()
+                
+        raise ClusterNotReadyError(last_reason, timeout_s)

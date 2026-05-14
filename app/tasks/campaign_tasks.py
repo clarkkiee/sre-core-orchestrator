@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.infrastructure.chaos.discovery import discover_services
+from app.infrastructure.chaos.exceptions import ClusterNotReadyError
 from app.infrastructure.chaos.manager import LitmusChaosManager
 from app.infrastructure.chaos.manifests import (
     _NEEDS_RUNTIME_SOCKET,
@@ -114,15 +115,20 @@ async def _run_single_experiment(  # noqa: PLR0913
         raise ValueError(msg)
 
     try:
+        await litmus_manager.ensure_cluster_ready(
+            kubeconfig_content=kubeconfig,
+            namespace=experiment.target_namespace,
+            target_label=experiment.target_label,
+            timeout_s=settings.CLUSTER_READY_TIMEOUT_S,
+            interval_s=settings.CLUSTER_READY_INTERVAL_S,
+            require_no_active_engine=settings.CLUSTER_READY_REQUIRE_NO_ACTIVE_ENGINE,
+        )
+        
         await chaos_repo.update(
             experiment,
             status=ChaosExperimentStatus.RUNNING,
             started_at=datetime.now(UTC),
         )
-
-        # BASELINE PHASE
-        baseline_start = datetime.now(UTC)
-        baseline_end = datetime.now(UTC)
 
         deployment_repo = DeploymentRepository(session)
         deployment = await deployment_repo.get_by_id(experiment.deployment_id)
@@ -171,19 +177,21 @@ async def _run_single_experiment(  # noqa: PLR0913
             timeout=timeout,
         )
 
-        logger.info("START FETCH CHAOS INJECTED TIME")
         injected_time = await _fetch_chaos_injected_time(
             vm_url=vm_url,
             engine_name=engine_name,
         )
-        logger.info("END FETCH CHAOS INJECTED TIME")
 
-        # RECOVERY PHASE     
+        # RECOVERY PHASE
+        if injected_time is None:
+            msg = f"Failed to fetch Chaos Injected Time"
+            raise ValueError(msg)
+        
         baseline_end = datetime.fromtimestamp(injected_time, tz=UTC)
         baseline_start = baseline_end - timedelta(seconds=120)
-
-        recovery_start = datetime.fromtimestamp(injected_time, tz=UTC)
-        recovery_end = recovery_start + timedelta(seconds=120)
+        fault_end = baseline_end + timedelta(seconds=experiment.duration_seconds)
+        recovery_start = fault_end
+        recovery_end = fault_end + timedelta(seconds=120)
 
         verdict = (
             chaos_result.get("status", {})
@@ -202,6 +210,7 @@ async def _run_single_experiment(  # noqa: PLR0913
             baseline_end=baseline_end.timestamp(),
             recovery_start=recovery_start.timestamp(),
             recovery_end=recovery_end.timestamp(),
+            chaos_injected_time=injected_time
         )
         await session.commit()
     except Exception as exc:
@@ -217,6 +226,27 @@ async def _run_single_experiment(  # noqa: PLR0913
         await session.commit()
         return "Error"
     else:
+        
+        try:
+            await litmus_manager.ensure_cluster_ready(
+                kubeconfig_content=kubeconfig,
+                namespace=experiment.target_namespace,
+                target_label=experiment.target_label,
+                interval_s=settings.CLUSTER_READY_INTERVAL_S,
+                timeout_s=settings.CLUSTER_READY_TIMEOUT_S,
+                require_no_active_engine=settings.CLUSTER_READY_REQUIRE_NO_ACTIVE_ENGINE
+            )
+        except ClusterNotReadyError as e:
+            logger.warning(
+                "Post recovery cluster readiness check failed for experiment=%s: ",
+                experiment.id, e
+            )
+            await chaos_repo.update(
+                experiment,
+                status_message=f"Verdict: {verdict} (post-recovery): not_ready: {e.reason}"
+            )
+            await session.commit()
+        
         # Enqueue evaluation via celery by task name to avoid static type issues
         celery_app.send_task("app.tasks.evaluate_experiment", args=[str(experiment.id)])
         logger.info("Enqueued evaluation for experiment=%s", experiment.id)

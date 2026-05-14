@@ -26,6 +26,7 @@ _FV_AVAILABILITY_LINKERD = "iso25010.availability.linkerd.v1"
 _FV_AVAILABILITY_POD_READY = "iso25010.availability.pod_ready.v1"
 
 _FV_MEAN_TIME_TO_FAILURE        = "iso25023.mttf.v1"
+_FV_RESPONSE_TIME_P95           = "iso25023.ptb2g.p95.v1"
 _FV_RESPONSE_TIME_P99           = "iso25023.ptb2g.p99.v1"
 _FV_ERROR_RATE                  = "iso25010.error_rate.v1"
 _FV_CPU_UTILIZATION             = "iso25023.pru1g.v1"
@@ -33,6 +34,7 @@ _FV_MEMORY_UTILIZATION          = "iso25023.pru2g.v1"
 _FV_FAULT_TOLERANCE_RATIO       = "iso25010.fault_tolerance_ratio.linkerd.v1"
 _FV_AVAILABILITY_LINKERD_RATIO  = "iso25010.availability.linkerd_ratio.v1"
 _FV_SUCCESS_RATE_DEGRADATION = "iso25010.fault_tolerance.success_rate_ratio.v1"
+_FV_LATENCY_P95_DEGRADATION = "iso25010.fault_tolerance.latency_p95_ratio.v1"
 _FV_LATENCY_P99_DEGRADATION = "iso25010.fault_tolerance.latency_p99_ratio.v1"
 
 class FaultWindowResolutionError(Exception):
@@ -289,28 +291,45 @@ def _detect_episodes_ratio(
 
     return episodes
 
-def compute_response_time_p99(
-    samples: list[RawMetricSample]
+def _compute_response_latency(
+    samples: list[RawMetricSample],
 ) -> dict[str, Any]:
+    """Shared core for percentile latency indicators (p95/p99).
+
+    Caller is responsible for sourcing the right histogram_quantile samples
+    (e.g. linkerd_response_latency_p95_ms vs _p99_ms) and tagging the resulting
+    indicator/formula_version accordingly.
+    """
     if not samples:
-        return {"value": None, "sample_count": 0, "episode_count": 0,"extra": None}
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
 
     values = [s.value for s in samples if s.value is not None]
     if not values:
-        return {"value": None, "sample_count": len(samples), "episode_count": 0,"extra": None}
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
 
-    mean_p99 = sum(values) / len(values)
-    peak_p99 = max(values)
+    mean_lat = sum(values) / len(values)
+    peak_lat = max(values)
 
     return {
-        "value": round(mean_p99, 3),
+        "value": round(mean_lat, 3),
         "sample_count": len(samples),
         "episode_count": 0,
         "extra": {
-            "mean_ms": round(mean_p99, 3),
-            "peak_ms": round(peak_p99, 3)
-        }
+            "mean_ms": round(mean_lat, 3),
+            "peak_ms": round(peak_lat, 3),
+        },
     }
+
+
+def compute_response_time_p95(
+    samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    return _compute_response_latency(samples)
+
+def compute_response_time_p99(
+    samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    return _compute_response_latency(samples)
 
 def compute_mean_time_to_failure(
     samples: list[RawMetricSample],
@@ -537,45 +556,54 @@ def compute_success_rate_degradation(
         }
     }
 
-def compute_latency_p99_degradation(
+def _compute_latency_degradation(
     baseline_samples: list[RawMetricSample],
-    fault_samples: list[RawMetricSample]
+    fault_samples: list[RawMetricSample],
+    percentile_label: str,
 ) -> dict[str, Any]:
-    """P99_fault / P99_baseline dari linkerd_response_latency_p99_ms"""
-
+    """Shared core: (P_fault - P_baseline) / P_baseline. percentile_label labels extra fields."""
     baseline_vals = [s.value for s in baseline_samples if s.value is not None]
     fault_vals = [s.value for s in fault_samples if s.value is not None]
 
     if not baseline_vals or not fault_vals:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    lat_baseline = sum(baseline_vals) / len(baseline_vals)
+    lat_fault = sum(fault_vals) / len(fault_vals)
+
+    if lat_baseline == 0.0:
         return {
             "value": None,
             "sample_count": 0,
             "episode_count": 0,
-            "extra": None
-        }
-
-    p99_baseline = sum(baseline_vals) / len(baseline_vals)
-    p99_fault = sum(fault_vals) / len(fault_vals)
-
-    if p99_baseline == 0.0:
-        return {
-            "value": None,
-            "sample_count": 0,
-            "episode_count": 0,
-            "extra": {
-                "note": "baseline_p99_zero"
-            }
+            "extra": {"note": f"baseline_{percentile_label}_zero"},
         }
 
     return {
-        "value": round((p99_fault - p99_baseline) / p99_baseline, 6),
+        "value": round((lat_fault - lat_baseline) / lat_baseline, 6),
         "sample_count": len(baseline_samples) + len(fault_samples),
         "episode_count": 0,
         "extra": {
-            "p99_baseline": round(p99_baseline, 6),
-            "p99_fault": round(p99_fault, 6)
-        }
+            f"{percentile_label}_baseline": round(lat_baseline, 6),
+            f"{percentile_label}_fault": round(lat_fault, 6),
+        },
     }
+
+
+def compute_latency_p95_degradation(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P95_fault - P95_baseline) / P95_baseline dari linkerd_response_latency_p95_ms"""
+    return _compute_latency_degradation(baseline_samples, fault_samples, "p95")
+
+
+def compute_latency_p99_degradation(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P99_fault - P99_baseline) / P99_baseline dari linkerd_response_latency_p99_ms"""
+    return _compute_latency_degradation(baseline_samples, fault_samples, "p99")
 
 
 # ---------------------------------------------------------------------------

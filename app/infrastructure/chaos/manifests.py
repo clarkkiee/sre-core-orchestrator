@@ -83,7 +83,6 @@ EXPERIMENT_TEMPLATES: dict[str, dict[str, Any]] = {
             "SEQUENCE": "parallel",
             "CONTAINER_RUNTIME": "containerd",
             "SOCKET_PATH": "/run/k3s/containerd/containerd.sock",
-          
             "RAMP_TIME":"0",
         },
     },

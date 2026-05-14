@@ -37,6 +37,23 @@ metrics:
     default_step: "5s"
     labels_to_keep: [namespace, workload]
     scope_label_key: "workload"
+  - name: linkerd_response_latency_p95_ms
+    source: linkerd_proxy
+    description: "Response latency P95 aggregated to deployment via pod-name extraction"
+    promql_template: >
+      histogram_quantile(0.95,
+        sum(
+          label_replace(
+            rate(response_latency_ms_bucket{namespace="$ns", direction="inbound"}[$window]),
+            "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+          )
+        ) by (le, workload)
+      )
+    unit: histogram
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"
   - name: linkerd_response_latency_p99_ms
     source: linkerd_proxy
     description: "Response latency P99 aggregated to deployment via pod-name extraction"
