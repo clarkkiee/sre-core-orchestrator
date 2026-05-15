@@ -473,7 +473,7 @@ class LitmusChaosManager:
                     )
                 ]
                 
-                if not_ready_nodes:
+                if not_ready_pods:
                     last_reason = f"pods not ready: {not_ready_pods}"
                     await asyncio.sleep(interval_s)
                     continue
@@ -483,12 +483,12 @@ class LitmusChaosManager:
                 if require_no_active_engine:
                     custom = client.CustomObjectsApi(api_client)
                     engines = await asyncio.wait_for(
-                        custom.get_namespaced_custom_object(
-                            group=_LITMUS_CRD_GROUP,
-                            version=_LITMUS_CRD_VERSION,
+                        custom.list_namespaced_custom_object(
                             namespace=namespace,
+                            version=_LITMUS_CRD_VERSION,
+                            group=_LITMUS_CRD_GROUP,
                             plural="chaosengines"
-                        ), # type: ignore
+                        ),
                         timeout=10.0
                     )
                     

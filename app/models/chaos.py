@@ -99,6 +99,10 @@ class ChaosExperiment(Base):
 
     configuration: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
+    baseline_metrics: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     started_at: Mapped[datetime | None] = mapped_column(

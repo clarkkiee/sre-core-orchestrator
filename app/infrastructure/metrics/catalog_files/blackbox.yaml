@@ -8,3 +8,12 @@ metrics:
     default_step: "5s"
     labels_to_keep: [namespace, service, instance, job]
     scope_label_key: "service"
+  - name: probe_success_htttp
+    source: blackbox_exporter
+    description: "HTTP-level Probe success (1 = HTTP 2xx, 0 = failure)"
+    promql_template: 'probe_success{namespace="$ns", job="blackbox-http"}'
+    unit: boolean
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"

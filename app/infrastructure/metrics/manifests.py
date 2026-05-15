@@ -193,8 +193,8 @@ def build_scrape_config() -> str:
     """Return a Prometheus-compatible scrape config for VictoriaMetrics."""
     return """\
 global:
-  scrape_interval: 15s
-  scrape_timeout: 10s
+  scrape_interval: 5s
+  scrape_timeout: 4s
 
 scrape_configs:
   - job_name: "kube-state-metrics"

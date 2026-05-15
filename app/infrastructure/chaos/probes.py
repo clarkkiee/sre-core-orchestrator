@@ -386,6 +386,32 @@ def resolve_thresholds(
         merged.update(experiment_overrides)
     return merged
 
+def derive_thresholds_from_baseline(
+    baseline_metrics: dict[str, float | None],
+    settings: Settings 
+) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    
+    p95 = baseline_metrics.get("baseline_p95_ms")
+    if p95 is not None and p95 > 0:
+        scaled = int(round(p95 * settings.PROBE_LATENCY_TOLERANCE_FACTOR))
+        overrides["p95_baseline_threshold_ms"] = scaled
+        overrides["p95_recovery_threshold_ms"] = scaled
+    
+    p99 = baseline_metrics.get("baseline_p99_ms")
+    if p99 is not None and p99 > 0:
+        scaled = int(round(p99 * settings.PROBE_LATENCY_TOLERANCE_FACTOR))
+        overrides["p99_baseline_threshold_ms"] = scaled
+        overrides["p99_recovery_threshold_ms"] = scaled
+    
+    sr = baseline_metrics.get("baseline_success_rate")
+    if sr is not None and sr > 0:
+        overrides["success_rate_slo"] = round(
+            sr * settings.PROBE_SUCCESS_TOLERANCE_FACTOR, 4
+        )        
+        
+    return overrides
+
 def _extract_target_name(app_label: str) -> str:
     if "=" not in app_label:
         return app_label

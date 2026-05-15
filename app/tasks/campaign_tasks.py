@@ -17,6 +17,9 @@ from app.infrastructure.chaos.probes import (
 )
 from app.tasks.chaos_tasks import _fetch_chaos_injected_time
 from app.infrastructure.metrics.client import VictoriaMetricsClient
+from app.infrastructure.metrics.catalog import MetricCatalog
+from app.services.evaluation import extract_baseline_metrics
+from app.infrastructure.chaos.probes import derive_thresholds_from_baseline
 from app.models.campaign import CampaignStatus, ChaosCampaign
 from app.models.chaos import ChaosExperiment, ChaosExperimentStatus, ExperimentType
 from app.models.job import Job, JobStatus
@@ -115,6 +118,7 @@ async def _run_single_experiment(  # noqa: PLR0913
         raise ValueError(msg)
 
     try:
+        # PRE BASELINE CLUSTER CEK
         await litmus_manager.ensure_cluster_ready(
             kubeconfig_content=kubeconfig,
             namespace=experiment.target_namespace,
@@ -129,12 +133,58 @@ async def _run_single_experiment(  # noqa: PLR0913
             status=ChaosExperimentStatus.RUNNING,
             started_at=datetime.now(UTC),
         )
+        await session.commit()
+        
+        # BASELINE PHASE
+        baseline_start = datetime.now(UTC)
+        logger.info(
+            "Baseline phase: experiment=%s observing for %ds",
+            experiment.id, EVALUATION_WINDOW_SECONDS
+        )
+        await asyncio.sleep(EVALUATION_WINDOW_SECONDS)
+        baseline_end = datetime.now(UTC)
+        
+        # EXTRACT BASELINE METRICS
+        derived_thresholds: dict[str, Any] = {}
+        baseline_metrics: dict[str, float | None] = {}
 
+        if settings.BASELINE_METRICS_ENABLED and vm_url:
+            vm_client = VictoriaMetricsClient(vm_url)
+            catalog = MetricCatalog.load_from_dir()
+            
+            baseline_metrics = await extract_baseline_metrics(
+                baseline_start=baseline_start,
+                baseline_end=baseline_end,
+                catalog=catalog,
+                namespace=experiment.target_namespace,
+                target_label=experiment.target_label,
+                vm_client=vm_client
+            )
+            
+            derived_thresholds = derive_thresholds_from_baseline(
+                baseline_metrics=baseline_metrics,
+                settings=settings
+            )
+            
+            logger.info(
+                "Baseline derived probe thresholds for experiment=%s: %s",
+                experiment.id, derived_thresholds,
+            )
+            
+        # Build probes with derived thresholds
         deployment_repo = DeploymentRepository(session)
         deployment = await deployment_repo.get_by_id(experiment.deployment_id)
         deployment_thresholds = deployment.probe_thresholds if deployment and deployment.probe_thresholds else {}
         if health_path:
             deployment_thresholds["target_health_path"] = health_path
+        
+        experiment_configuration = dict(experiment.configuration or {})
+        probes_cfg = dict(experiment_configuration.get("probes") or {})
+        existing_thresholds = dict(probes_cfg.get("thresholds") or {})
+        
+        merged_thresholds = {**derived_thresholds, **existing_thresholds}
+        probes_cfg["thresholds"] = merged_thresholds
+        experiment_configuration["probes"] = probes_cfg
 
         probes = build_probes(
             experiment_type=litmus_name,
@@ -146,8 +196,16 @@ async def _run_single_experiment(  # noqa: PLR0913
             prom_url=vm_url,
             settings=settings,
             deployment_thresholds=deployment_thresholds,
-            experiment_configuration=experiment.configuration,
+            experiment_configuration=experiment_configuration,
         )
+        
+        await chaos_repo.update(
+            experiment,
+            baseline_metrics=baseline_metrics,
+            baseline_start=baseline_start.timestamp(),
+            baseline_end=baseline_end.timestamp(),
+        )
+        await session.commit()
         
         # FAULT PHASE
         await litmus_manager.create_experiment(
@@ -182,16 +240,20 @@ async def _run_single_experiment(  # noqa: PLR0913
             engine_name=engine_name,
         )
 
-        # RECOVERY PHASE
         if injected_time is None:
             msg = f"Failed to fetch Chaos Injected Time"
             raise ValueError(msg)
         
-        baseline_end = datetime.fromtimestamp(injected_time, tz=UTC)
-        baseline_start = baseline_end - timedelta(seconds=120)
-        fault_end = baseline_end + timedelta(seconds=experiment.duration_seconds)
+        # RECOVERY PHASE
+        fault_start = datetime.fromtimestamp(injected_time, tz=UTC)
+        fault_end = fault_start + timedelta(seconds=experiment.duration_seconds)
+      
         recovery_start = fault_end
-        recovery_end = fault_end + timedelta(seconds=120)
+        recovery_end = fault_end + timedelta(seconds=EVALUATION_WINDOW_SECONDS)
+        
+        now = datetime.now(UTC)
+        if now < recovery_end:
+            await asyncio.sleep((recovery_end - now).total_seconds())
 
         verdict = (
             chaos_result.get("status", {})
@@ -206,8 +268,6 @@ async def _run_single_experiment(  # noqa: PLR0913
             status=ChaosExperimentStatus.COMPLETED,
             status_message=f"Verdict: {verdict}",
             completed_at=datetime.now(UTC),
-            baseline_start=baseline_start.timestamp(),
-            baseline_end=baseline_end.timestamp(),
             recovery_start=recovery_start.timestamp(),
             recovery_end=recovery_end.timestamp(),
             chaos_injected_time=injected_time

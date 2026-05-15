@@ -22,14 +22,10 @@ from app.repositories.evaluation import EvaluationRepository
 from app.repositories.raw_metric_sample import RawMetricSampleRepository
 from app.services.evaluation import (
     _FV_AVAILABILITY_BLACKBOX_TCP,
-    _FV_AVAILABILITY_LINKERD_RATIO,
-    _FV_AVAILABILITY_POD_READY,
     _FV_CPU_UTILIZATION,
     _FV_ERROR_RATE,
-    _FV_FAULT_TOLERANCE_RATIO,
     _FV_LATENCY_P95_DEGRADATION,
     _FV_LATENCY_P99_DEGRADATION,
-    _FV_MEAN_DOWN_TIME,
     _FV_MEAN_RECOVERY_TIME,
     _FV_MEMORY_UTILIZATION,
     _FV_RESPONSE_TIME_P95,
@@ -38,13 +34,10 @@ from app.services.evaluation import (
     FaultWindowResolutionError,
     PhaseWindows,
     build_indicator_rows,
-    compute_availability_ratio,
     compute_cpu_utilization,
     compute_error_rate,
-    compute_fault_tolerance_ratio,
     compute_latency_p95_degradation,
     compute_latency_p99_degradation,
-    compute_mean_down_time,
     compute_mean_recovery_time,
     compute_memory_utilization,
     compute_response_time_p95,
@@ -61,12 +54,7 @@ from app.tasks.shared import task_session
 logger = logging.getLogger(__name__)
 
 _BINARY_AVAILABILITY_SIGNALS: list[tuple[str, str]] = [
-    ("probe_success",         _FV_AVAILABILITY_BLACKBOX_TCP),
-    ("kube_pod_status_ready", _FV_AVAILABILITY_POD_READY),
-]
-
-_RATIO_AVAILABILITY_SIGNALS: list[tuple[str, str]] = [
-    ("linkerd_success_rate", _FV_AVAILABILITY_LINKERD_RATIO),
+    ("probe_success", _FV_AVAILABILITY_BLACKBOX_TCP),
 ]
 
 _PERFORMANCE_SIGNAL_NAMES: list[str] = [
@@ -74,6 +62,10 @@ _PERFORMANCE_SIGNAL_NAMES: list[str] = [
     "linkerd_response_latency_p99_ms",
     "linkerd_error_rate",
     "cadvisor_cpu_cores_used",
+]
+
+_AUX_SIGNAL_NAMES: list[str] = [
+    "linkerd_success_rate"
 ]
 
 _MEMORY_SIGNAL_NAMES: list[str] = [
@@ -100,12 +92,6 @@ _PERF_COMPUTE_MAP: dict[str, tuple[ISOIndicator, str, Any]] = {
     ),
 }
 
-# Probe.actual_value is INFORMATIONAL ONLY: extracted for audit/observability so
-# operators can compare "what the probe saw" vs the controller-computed indicator.
-# It is NOT a source of evaluation_indicators rows — Litmus probes execute
-# sequentially at EOT, so each promProbe's range query is anchored to its own
-# T_now and drifts from chaos_end. Use the manual collection path for any
-# accuracy-critical reporting.
 _ACTUAL_VALUE_RE = re.compile(r"Actual value:\s*(.*?)(?:\.\s*Expected value:|$)")
 
 _PROBE_TYPE_MAP: dict[str, str] = {
@@ -205,7 +191,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
         # Step 3+4 — fetch raw samples for each phase and load from DB
         metric_names = (
             [name for name, _ in _BINARY_AVAILABILITY_SIGNALS]
-            + [name for name, _ in _RATIO_AVAILABILITY_SIGNALS]
+            + _AUX_SIGNAL_NAMES
             + _PERFORMANCE_SIGNAL_NAMES
             + _MEMORY_SIGNAL_NAMES
         )
@@ -228,18 +214,18 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             "recovery_start": windows.recovery_start,
             "recovery_end": windows.recovery_end,
             "litmus_probe_percentage": _extract_litmus_probe_pct(experiment),
-            "status": "SUCCESS",
-            "evaluator_version": "v1",
+            "status": _derive_evaluation_status(experiment),
+            "evaluator_version": "v2",
         }
         evaluation = await eval_repo.upsert_evaluation(eval_data)
 
         probe_rows = _extract_probe_results(experiment)
         await _upsert_probe_results(session, evaluation.id, probe_rows)
 
-        # Step 6 — compute and upsert indicator rows
+        # Step 6 compute and upsert indicator rows
         indicator_rows: list[dict[str, Any]] = []
 
-        # Binary availability signals (probe_success, kube_pod_status_ready) — time-based
+        # Binary availability signals (probe_success) time-based
         for metric_name, fv_avail in _BINARY_AVAILABILITY_SIGNALS:
             definition = catalog.get(metric_name)
             _compute_availability_for_signal(
@@ -262,17 +248,8 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             )
             for phase in MetricPhase
         }
-        for metric_name, fv_avail in _RATIO_AVAILABILITY_SIGNALS:
-            _compute_ratio_availability_for_signal(
-                evaluation_id=evaluation.id,
-                samples_by_phase=all_samples[metric_name],
-                target_label=experiment.target_label,
-                scope_label_key=catalog.get(metric_name).scope_label_key,
-                formula_version_avail=fv_avail,
-                rows=indicator_rows,
-            )
-
-        # MDT from probe_success (binary episodes)
+                  
+        # MRT from blackbox exporter
         probe_scopes_by_phase = {
             phase: partition_by_scope(
                 all_samples["probe_success"][phase],
@@ -281,19 +258,11 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             )
             for phase in MetricPhase
         }
-        _compute_per_phase_indicators(
-            evaluation_id=evaluation.id,
-            scopes_by_phase=probe_scopes_by_phase,
-            rows=indicator_rows,
-        )
 
-        # MRT and FTR from linkerd_success_rate (ratio signal)
         _compute_mrt(
             evaluation_id=evaluation.id,
-            fault_scopes=probe_scopes_by_phase[MetricPhase.FAULT],
-            recovery_scopes=probe_scopes_by_phase[MetricPhase.RECOVERY],
-            baseline_scopes=probe_scopes_by_phase[MetricPhase.BASELINE],
-            fault_end=windows.fault_end,
+            probe_fault_scopes=probe_scopes_by_phase[MetricPhase.FAULT],
+            probe_recovery_scopes=probe_scopes_by_phase[MetricPhase.RECOVERY],
             rows=indicator_rows,
         )
 
@@ -358,12 +327,6 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             rows=indicator_rows,
         )
 
-        # Probe-derived indicator path intentionally disabled: probe.actual_value
-        # suffers sequential-execution drift (each EOT promProbe queries from its
-        # own T_now, not chaos_end). All evaluation_indicators rows come from the
-        # controller's anchored manual collection above. Probe verdicts and
-        # actual_value are still persisted on probe_results for audit/observability.
-
         inserted = await eval_repo.upsert_indicators(indicator_rows)
 
         logger.info(
@@ -381,46 +344,34 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _compute_per_phase_indicators(
-    evaluation_id: uuid.UUID,
-    scopes_by_phase: dict[MetricPhase, dict[MeasurementScope, list[RawMetricSample]]],
-    rows: list[dict[str, Any]],
-) -> None:
-    for phase, scope_map in scopes_by_phase.items():
-        for scope, samples in scope_map.items():
-            mdt = compute_mean_down_time(samples)
-            row = build_indicator_rows(
-                evaluation_id, ISOIndicator.MEAN_DOWN_TIME,
-                phase, scope, mdt, _FV_MEAN_DOWN_TIME,
-            )
-            if row:
-                rows.append(row)
-
 def _compute_mrt(
     evaluation_id: uuid.UUID,
-    fault_scopes: dict[MeasurementScope, list[RawMetricSample]],
-    recovery_scopes: dict[MeasurementScope, list[RawMetricSample]],
-    baseline_scopes: dict[MeasurementScope, list[RawMetricSample]],
-    fault_end: datetime,
+    probe_fault_scopes: dict[MeasurementScope, list[RawMetricSample]],
+    probe_recovery_scopes: dict[MeasurementScope, list[RawMetricSample]],
     rows: list[dict[str, Any]],
-    binary_signal: bool = True,
+    step_seconds: float = 5.0,
 ) -> None:
     for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
-        mrt = compute_mean_recovery_time(
-            fault_samples=fault_scopes.get(scope, []),
-            fault_end=fault_end,
-            recovery_samples=recovery_scopes.get(scope, []),
-            binary_signal=binary_signal
-        )
-
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.MEAN_RECOVERY_TIME,
-            None, scope, mrt, _FV_MEAN_RECOVERY_TIME
-        )
-
-        if row:
-            rows.append(row)
-
+       probe_fault = probe_fault_scopes.get(scope, [])
+       probe_recovery = probe_recovery_scopes.get(scope, [])
+       
+       if not probe_fault and not probe_recovery:
+           continue
+       
+       mrt = compute_mean_recovery_time(
+           fault_samples=probe_fault,
+           recovery_samples=probe_recovery,
+           step_seconds=step_seconds,
+       )
+       
+       row = build_indicator_rows(
+           evaluation_id, ISOIndicator.MEAN_RECOVERY_TIME,
+           None, scope, mrt, _FV_MEAN_RECOVERY_TIME
+       )
+       
+       if row:
+           rows.append(row)
+       
 async def _fetch_all_samples(
     query_engine: MetricsQueryEngine,
     sample_repo: RawMetricSampleRepository,
@@ -548,7 +499,30 @@ async def _upsert_probe_results(
         await session.execute(stmt)
         
     await session.flush()
+
+def _derive_evaluation_status(experiment: Any) -> str: # noqa: ANN401
+    result = experiment.result or {}
+    exp_status = result.get("status", {}).get("experimentStatus", {})
+    verdict = exp_status.get("verdict", {})
     
+    pct_str = exp_status.get("probeSuccessPercentage")
+    try:
+        psp = float(pct_str) if pct_str is not None else 0.0
+    except (TypeError, ValueError):
+        psp = 0.0
+        
+    if verdict in ("Error", "Stopped"):
+        return "FAILED"
+    if verdict == "Fail":
+        return "FAILED" if psp == 0.0 else "PARTIAL"
+    if verdict == "Pass":
+        if psp >= 100.0:
+            return "SUCCESS"
+        if psp >= 50.0:
+            return "PARTIAL"
+        return "FAILED"
+    return "PARTIAL" 
+
 def _compute_availability_for_signal(
     evaluation_id: uuid.UUID,
     samples_by_phase: dict[MetricPhase, list[RawMetricSample]],
@@ -624,49 +598,7 @@ def _compute_memory_indicators(
             )
             if row:
                 rows.append(row)
-
-def _compute_fault_tolerance_ratio(
-    evaluation_id: uuid.UUID,
-    baseline_scopes: dict[MeasurementScope, list[RawMetricSample]],
-    fault_scopes: dict[MeasurementScope, list[RawMetricSample]],
-    rows: list[dict[str,Any]]
-) -> None:
-    for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
-        result = compute_fault_tolerance_ratio(
-            baseline_samples=baseline_scopes.get(scope, []),
-            fault_samples=fault_scopes.get(scope, []),
-        )
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.FAULT_TOLERANCE_RATIO,
-            None, scope, result, _FV_FAULT_TOLERANCE_RATIO,
-        )
-
-        if row:
-            rows.append(row)
-
-def _compute_ratio_availability_for_signal(
-    evaluation_id: uuid.UUID,
-    samples_by_phase: dict[MetricPhase, list[RawMetricSample]],
-    target_label: str,
-    scope_label_key: str | None,
-    formula_version_avail: str,
-    rows: list[dict[str, Any]]
-) -> None:
-    for phase, samples in samples_by_phase.items():
-        scope_map = partition_by_scope(
-            samples, target_label, scope_label_key
-        )
-
-        for scope, scoped_samples in scope_map.items():
-            result = compute_availability_ratio(scoped_samples)
-            row = build_indicator_rows(
-                evaluation_id, ISOIndicator.SYSTEM_AVAILABILITY,
-                phase, scope, result, formula_version_avail
-            )
-
-            if row:
-                rows.append(row)
-
+                
 def _compute_success_rate_degradation(
     evaluation_id: uuid.UUID,
     baseline_scopes: dict[MeasurementScope, list[RawMetricSample]],
@@ -729,3 +661,4 @@ def _compute_latency_p99_degradation(
 
         if row:
             rows.append(row)
+

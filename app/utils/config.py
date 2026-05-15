@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # Multipass + k3s settings (used when CLUSTER_PROVIDER=multipass_k3s)
     MULTIPASS_BINARY: str = "/snap/bin/multipass"
     VM_CPUS: int = 2
-    VM_MEMORY: str = "2G"
+    VM_MEMORY: str = "4G"
     VM_DISK: str = "10G"
     K3S_DISABLE_TRAEFIK: bool = True
 
@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     PROBE_DEFAULT_RECOVERY_RETRY: int = 9
     PROBE_DEFAULT_RECOVERY_INTERVAL_S: int = 10
     PROBE_DEFAULT_MEMORY_RESTART_MAX: int = 1
+    BASELINE_METRICS_ENABLED: bool = True
+    PROBE_LATENCY_TOLERANCE_FACTOR: float = 1.5
+    PROBE_SUCCESS_TOLERANCE_FACTOR: float = 0.95
 
     # Probe target endpoint defaults (deployment can override via probe_thresholds).
     PROBE_DEFAULT_TARGET_PORT: int = 80
@@ -161,6 +164,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()

@@ -21,13 +21,10 @@ from app.models import Base
 
 class ISOIndicator(enum.StrEnum):
     SYSTEM_AVAILABILITY = "SYSTEM_AVAILABILITY"
-    MEAN_DOWN_TIME = "MEAN_DOWN_TIME"             
     MEAN_RECOVERY_TIME = "MEAN_RECOVERY_TIME"     
-    MEAN_TIME_TO_FAILURE  = "MEAN_TIME_TO_FAILURE"    
     RESPONSE_TIME_P95     = "RESPONSE_TIME_P95"      
     RESPONSE_TIME_P99     = "RESPONSE_TIME_P99"       
     ERROR_RATE            = "ERROR_RATE"
-    FAULT_TOLERANCE_RATIO = "FAULT_TOLERANCE_RATIO"   
     CPU_UTILIZATION       = "CPU_UTILIZATION"
     MEMORY_UTILIZATION    = "MEMORY_UTILIZATION"
     SUCCESS_RATE_DEGRADATION = "SUCCESS_RATE_DEGRADATION"
@@ -42,7 +39,6 @@ class ISOSubCharacteristics(enum.StrEnum):
 
 _AVAILABILITY_INDICATORS = frozenset({
     ISOIndicator.SYSTEM_AVAILABILITY,
-    ISOIndicator.MEAN_DOWN_TIME
 })
 
 def derive_sub_characteristic(
@@ -51,8 +47,6 @@ def derive_sub_characteristic(
 ) -> ISOSubCharacteristics:
     if indicator == ISOIndicator.MEAN_RECOVERY_TIME:
         return ISOSubCharacteristics.RECOVERABILITY
-    if indicator == ISOIndicator.FAULT_TOLERANCE_RATIO:
-        return ISOSubCharacteristics.FAULT_TOLERANCE
     if indicator == ISOIndicator.SUCCESS_RATE_DEGRADATION:
         return ISOSubCharacteristics.FAULT_TOLERANCE
     if indicator == ISOIndicator.LATENCY_P95_DEGRADATION:
