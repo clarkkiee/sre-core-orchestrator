@@ -278,6 +278,32 @@ scrape_configs:
         - source_labels: [__meta_kubernetes_service_name]
           target_label: service
 
+  - job_name: "blackbox-grpc"
+    metrics_path: /probe
+    params:
+        module: [grpc]
+    kubernetes_sd_configs:
+        - role: service
+    relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace]
+          action: drop
+          regex: "kube-system|monitoring|litmus|linkerd.*"
+        - source_labels: [__meta_kubernetes_service_port_name]
+          action: keep
+          regex: "(grpc|.*-grpc|grpc-.*)"
+        - source_labels: [__address__]
+          target_label: __param_target
+        - target_label: __address__
+          replacement: "blackbox-exporter.monitoring.svc.cluster.local:9115"
+        - source_labels: [__param_target]
+          target_label: instance
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_service_name]
+          target_label: service
+        - source_labels: [__meta_kubernetes_service_port_name]
+          target_label: port_name
+
   - job_name: "litmus-chaos-exporter"
     kubernetes_sd_configs:
         - role: endpoints
@@ -500,6 +526,12 @@ modules:
     tcp_connect:
         prober: tcp
         timeout: 5s
+    grpc:
+        prober: grpc
+        timeout: 5s
+        grpc:
+            tls: false
+            preferred_ip_protocol: ip4
 """
         },
     }

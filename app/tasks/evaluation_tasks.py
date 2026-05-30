@@ -24,25 +24,46 @@ from app.services.evaluation import (
     _FV_AVAILABILITY_BLACKBOX_TCP,
     _FV_CPU_UTILIZATION,
     _FV_ERROR_RATE,
+    _FV_ERROR_RATE_BLACKBOX,
+    _FV_LATENCY_P95_DEG_LINKERD_SUCCESS,
     _FV_LATENCY_P95_DEGRADATION,
+    _FV_LATENCY_P95_DEGRADATION_BLACKBOX,
+    _FV_LATENCY_P95_DEGRADATION_BLACKBOX_PROC,
+    _FV_LATENCY_P99_DEG_LINKERD_SUCCESS,
     _FV_LATENCY_P99_DEGRADATION,
+    _FV_LATENCY_P99_DEGRADATION_BLACKBOX,
+    _FV_LATENCY_P99_DEGRADATION_BLACKBOX_PROC,
     _FV_MEAN_RECOVERY_TIME,
     _FV_MEMORY_UTILIZATION,
     _FV_RESPONSE_TIME_P95,
+    _FV_RESPONSE_TIME_P95_BLACKBOX,
+    _FV_RESPONSE_TIME_P95_BLACKBOX_PROC,
+    _FV_RESPONSE_TIME_P95_LINKERD_SUCCESS,
     _FV_RESPONSE_TIME_P99,
+    _FV_RESPONSE_TIME_P99_BLACKBOX,
+    _FV_RESPONSE_TIME_P99_BLACKBOX_PROC,
+    _FV_RESPONSE_TIME_P99_LINKERD_SUCCESS,
     _FV_SUCCESS_RATE_DEGRADATION,
+    _FV_SUCCESS_RATE_DEGRADATION_BLACKBOX,
     FaultWindowResolutionError,
     PhaseWindows,
     build_indicator_rows,
     compute_cpu_utilization,
     compute_error_rate,
+    compute_error_rate_blackbox_grpc,
+    compute_error_rate_blackbox_http,
     compute_latency_p95_degradation,
+    compute_latency_p95_degradation_blackbox,
     compute_latency_p99_degradation,
+    compute_latency_p99_degradation_blackbox,
     compute_mean_recovery_time,
     compute_memory_utilization,
     compute_response_time_p95,
+    compute_response_time_p95_blackbox,
     compute_response_time_p99,
+    compute_response_time_p99_blackbox,
     compute_success_rate_degradation,
+    compute_success_rate_degradation_blackbox,
     compute_system_availability,
     partition_by_scope,
     resolve_fault_window,
@@ -64,6 +85,13 @@ _PERFORMANCE_SIGNAL_NAMES: list[str] = [
     "cadvisor_cpu_cores_used",
 ]
 
+# Linkerd success-only variants — fetched separately, compute pakai function
+# yang sama dengan Linkerd-all tapi emit row dengan formula_version berbeda.
+_LINKERD_SUCCESS_LATENCY_SIGNALS: list[str] = [
+    "linkerd_response_latency_p95_success_ms",
+    "linkerd_response_latency_p99_success_ms",
+]
+
 _AUX_SIGNAL_NAMES: list[str] = [
     "linkerd_success_rate"
 ]
@@ -72,6 +100,43 @@ _MEMORY_SIGNAL_NAMES: list[str] = [
     "container_memory_working_set_bytes",
     "kube_pod_container_restarts_total",
 ]
+
+# Blackbox-sourced signals fetched in parallel for additive evaluation rows.
+# Result rows carry the *_BLACKBOX formula_version so they coexist with the
+# Linkerd-sourced rows (different formula_version → no unique-constraint clash).
+_BLACKBOX_SIGNAL_NAMES: list[str] = [
+    "probe_success_htttp",
+    "probe_success_grpc",
+    "probe_duration_seconds_http",
+    "probe_duration_seconds_grpc",
+    "probe_http_status_code",
+    "probe_grpc_status_code",
+    "probe_http_duration_processing",
+]
+
+def _resolve_service_protocol(
+    discovered_services: list[dict[str, Any]] | None,
+    target_label: str,
+    default: str = "http",
+) -> str:
+    """Lookup service protocol from campaign.discovered_services.
+
+    Returns 'grpc', 'http', or 'tcp' (fallback to `default` if not found).
+    Reuses the protocol inference dari `_infer_service_protocol` di
+    `app.infrastructure.chaos.discovery` (sudah dijalankan saat campaign start
+    dan dipersist ke chaos_campaigns.discovered_services JSONB column).
+    """
+    if not discovered_services:
+        return default
+    name = (
+        target_label.split("=", 1)[1].strip()
+        if "=" in target_label
+        else target_label
+    )
+    for svc in discovered_services:
+        if svc.get("name") == name:
+            return svc.get("protocol") or default
+    return default
 
 _PERF_COMPUTE_MAP: dict[str, tuple[ISOIndicator, str, Any]] = {
     "linkerd_response_latency_p95_ms": (
@@ -82,6 +147,16 @@ _PERF_COMPUTE_MAP: dict[str, tuple[ISOIndicator, str, Any]] = {
     "linkerd_response_latency_p99_ms": (
         ISOIndicator.RESPONSE_TIME_P99,
         _FV_RESPONSE_TIME_P99,
+        compute_response_time_p99,
+    ),
+    "linkerd_response_latency_p95_success_ms": (
+        ISOIndicator.RESPONSE_TIME_P95,
+        _FV_RESPONSE_TIME_P95_LINKERD_SUCCESS,
+        compute_response_time_p95,
+    ),
+    "linkerd_response_latency_p99_success_ms": (
+        ISOIndicator.RESPONSE_TIME_P99,
+        _FV_RESPONSE_TIME_P99_LINKERD_SUCCESS,
         compute_response_time_p99,
     ),
     "linkerd_error_rate": (
@@ -193,7 +268,9 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             [name for name, _ in _BINARY_AVAILABILITY_SIGNALS]
             + _AUX_SIGNAL_NAMES
             + _PERFORMANCE_SIGNAL_NAMES
+            + _LINKERD_SUCCESS_LATENCY_SIGNALS
             + _MEMORY_SIGNAL_NAMES
+            + _BLACKBOX_SIGNAL_NAMES
         )
         all_samples = await _fetch_all_samples(
             query_engine=query_engine,
@@ -307,7 +384,52 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             rows=indicator_rows
         )
 
-        for signal_name in _PERFORMANCE_SIGNAL_NAMES:
+        # Linkerd success-only latency degradation (industry-standard RED).
+        # Cross-phase: (P95/99_fault - P95/99_baseline) / P95/99_baseline,
+        # dihitung dari histogram yang hanya berisi request classification=success.
+        p95_success_def = catalog.get("linkerd_response_latency_p95_success_ms")
+        linkerd_p95_success_scopes_by_phase = {
+            phase: partition_by_scope(
+                all_samples["linkerd_response_latency_p95_success_ms"][phase],
+                experiment.target_label,
+                scope_label_key=p95_success_def.scope_label_key,
+            )
+            for phase in MetricPhase
+        }
+        for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
+            result = compute_latency_p95_degradation(
+                baseline_samples=linkerd_p95_success_scopes_by_phase[MetricPhase.BASELINE].get(scope, []),
+                fault_samples=linkerd_p95_success_scopes_by_phase[MetricPhase.FAULT].get(scope, []),
+            )
+            row = build_indicator_rows(
+                evaluation.id, ISOIndicator.LATENCY_P95_DEGRADATION,
+                None, scope, result, _FV_LATENCY_P95_DEG_LINKERD_SUCCESS,
+            )
+            if row:
+                indicator_rows.append(row)
+
+        p99_success_def = catalog.get("linkerd_response_latency_p99_success_ms")
+        linkerd_p99_success_scopes_by_phase = {
+            phase: partition_by_scope(
+                all_samples["linkerd_response_latency_p99_success_ms"][phase],
+                experiment.target_label,
+                scope_label_key=p99_success_def.scope_label_key,
+            )
+            for phase in MetricPhase
+        }
+        for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
+            result = compute_latency_p99_degradation(
+                baseline_samples=linkerd_p99_success_scopes_by_phase[MetricPhase.BASELINE].get(scope, []),
+                fault_samples=linkerd_p99_success_scopes_by_phase[MetricPhase.FAULT].get(scope, []),
+            )
+            row = build_indicator_rows(
+                evaluation.id, ISOIndicator.LATENCY_P99_DEGRADATION,
+                None, scope, result, _FV_LATENCY_P99_DEG_LINKERD_SUCCESS,
+            )
+            if row:
+                indicator_rows.append(row)
+
+        for signal_name in _PERFORMANCE_SIGNAL_NAMES + _LINKERD_SUCCESS_LATENCY_SIGNALS:
             definition = catalog.get(signal_name)
             _compute_performance_indicators(
                 evaluation_id=evaluation.id,
@@ -325,6 +447,30 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             target_label=experiment.target_label,
             scope_label_key=ws_definition.scope_label_key,
             rows=indicator_rows,
+        )
+
+        # Additive: blackbox-sourced indicator rows (parallel formula_version).
+        # Resolve service protocol dari campaign.discovered_services (dipersist
+        # saat discovery oleh campaign task) — bukan dari hardcoded list.
+        # Lookup minimal kolom saja untuk hindari eager-load relationship yang
+        # bisa konflik dengan session yang sedang dirty.
+        discovered_services: list[dict[str, Any]] | None = None
+        if experiment.campaign_id is not None:
+            from sqlalchemy import select
+            from app.models.campaign import ChaosCampaign
+            stmt = select(ChaosCampaign.discovered_services).where(
+                ChaosCampaign.id == experiment.campaign_id
+            )
+            result = await session.execute(stmt)
+            discovered_services = result.scalar_one_or_none()
+
+        _compute_blackbox_indicators(
+            evaluation_id=evaluation.id,
+            all_samples=all_samples,
+            target_label=experiment.target_label,
+            catalog=catalog,
+            rows=indicator_rows,
+            discovered_services=discovered_services,
         )
 
         inserted = await eval_repo.upsert_indicators(indicator_rows)
@@ -662,3 +808,179 @@ def _compute_latency_p99_degradation(
         if row:
             rows.append(row)
 
+
+def _compute_blackbox_indicators(
+    evaluation_id: uuid.UUID,
+    all_samples: dict[str, dict[MetricPhase, list[RawMetricSample]]],
+    target_label: str,
+    catalog: MetricCatalog,
+    rows: list[dict[str, Any]],
+    discovered_services: list[dict[str, Any]] | None = None,
+) -> None:
+    """Compute blackbox-sourced indicators and append to rows.
+
+    Additive: produces rows with *_BLACKBOX formula_versions parallel to the
+    Linkerd-based rows. Dispatches source metric based on service protocol
+    (HTTP vs gRPC) resolved from `discovered_services` per campaign.
+
+    Also emits *_BLACKBOX_PROC variants for LATENCY indicators using
+    `probe_http_duration_processing` (server-side phase only, isolating
+    handler latency from TCP/DNS/teardown noise floor).
+    """
+    protocol = _resolve_service_protocol(discovered_services, target_label)
+
+    if protocol == "grpc":
+        duration_metric = "probe_duration_seconds_grpc"
+        status_metric = "probe_grpc_status_code"
+        success_metric = "probe_success_grpc"
+        error_compute_fn = compute_error_rate_blackbox_grpc
+    else:
+        duration_metric = "probe_duration_seconds_http"
+        status_metric = "probe_http_status_code"
+        success_metric = "probe_success_htttp"
+        error_compute_fn = compute_error_rate_blackbox_http
+
+    duration_def = catalog.get(duration_metric)
+    status_def = catalog.get(status_metric)
+    success_def = catalog.get(success_metric)
+    proc_def = catalog.get("probe_http_duration_processing")
+
+    duration_scopes_by_phase = {
+        phase: partition_by_scope(
+            all_samples[duration_metric][phase],
+            target_label,
+            scope_label_key=duration_def.scope_label_key,
+        )
+        for phase in MetricPhase
+    }
+    status_scopes_by_phase = {
+        phase: partition_by_scope(
+            all_samples[status_metric][phase],
+            target_label,
+            scope_label_key=status_def.scope_label_key,
+        )
+        for phase in MetricPhase
+    }
+    success_scopes_by_phase = {
+        phase: partition_by_scope(
+            all_samples[success_metric][phase],
+            target_label,
+            scope_label_key=success_def.scope_label_key,
+        )
+        for phase in MetricPhase
+    }
+    # Processing-phase scopes (HTTP probe only — even for gRPC services, the
+    # HTTP probe still runs and phase=processing measures time-to-response).
+    # Skip for protocol=tcp where probe layer breakdown isn't meaningful.
+    proc_scopes_by_phase: dict[MetricPhase, dict[MeasurementScope, list[RawMetricSample]]] | None = None
+    if protocol in {"http", "grpc"}:
+        proc_scopes_by_phase = {
+            phase: partition_by_scope(
+                all_samples["probe_http_duration_processing"][phase],
+                target_label,
+                scope_label_key=proc_def.scope_label_key,
+            )
+            for phase in MetricPhase
+        }
+
+    # Phase-wise indicators: RESPONSE_TIME_P95/P99 (total + processing) and ERROR_RATE
+    for phase in MetricPhase:
+        for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
+            duration_samples = duration_scopes_by_phase[phase].get(scope, [])
+            status_samples = status_scopes_by_phase[phase].get(scope, [])
+
+            p95_result = compute_response_time_p95_blackbox(duration_samples)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.RESPONSE_TIME_P95,
+                phase, scope, p95_result, _FV_RESPONSE_TIME_P95_BLACKBOX,
+            )
+            if row:
+                rows.append(row)
+
+            p99_result = compute_response_time_p99_blackbox(duration_samples)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.RESPONSE_TIME_P99,
+                phase, scope, p99_result, _FV_RESPONSE_TIME_P99_BLACKBOX,
+            )
+            if row:
+                rows.append(row)
+
+            er_result = error_compute_fn(status_samples)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.ERROR_RATE,
+                phase, scope, er_result, _FV_ERROR_RATE_BLACKBOX,
+            )
+            if row:
+                rows.append(row)
+
+            # Processing-phase variants (SNR-isolated latency)
+            if proc_scopes_by_phase is not None:
+                proc_samples = proc_scopes_by_phase[phase].get(scope, [])
+
+                p95_proc_result = compute_response_time_p95_blackbox(proc_samples)
+                row = build_indicator_rows(
+                    evaluation_id, ISOIndicator.RESPONSE_TIME_P95,
+                    phase, scope, p95_proc_result, _FV_RESPONSE_TIME_P95_BLACKBOX_PROC,
+                )
+                if row:
+                    rows.append(row)
+
+                p99_proc_result = compute_response_time_p99_blackbox(proc_samples)
+                row = build_indicator_rows(
+                    evaluation_id, ISOIndicator.RESPONSE_TIME_P99,
+                    phase, scope, p99_proc_result, _FV_RESPONSE_TIME_P99_BLACKBOX_PROC,
+                )
+                if row:
+                    rows.append(row)
+
+    # Cross-phase degradation indicators
+    for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
+        sr_baseline = success_scopes_by_phase[MetricPhase.BASELINE].get(scope, [])
+        sr_fault = success_scopes_by_phase[MetricPhase.FAULT].get(scope, [])
+        sr_result = compute_success_rate_degradation_blackbox(sr_baseline, sr_fault)
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.SUCCESS_RATE_DEGRADATION,
+            None, scope, sr_result, _FV_SUCCESS_RATE_DEGRADATION_BLACKBOX,
+        )
+        if row:
+            rows.append(row)
+
+        lat_baseline = duration_scopes_by_phase[MetricPhase.BASELINE].get(scope, [])
+        lat_fault = duration_scopes_by_phase[MetricPhase.FAULT].get(scope, [])
+
+        p95_deg_result = compute_latency_p95_degradation_blackbox(lat_baseline, lat_fault)
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.LATENCY_P95_DEGRADATION,
+            None, scope, p95_deg_result, _FV_LATENCY_P95_DEGRADATION_BLACKBOX,
+        )
+        if row:
+            rows.append(row)
+
+        p99_deg_result = compute_latency_p99_degradation_blackbox(lat_baseline, lat_fault)
+        row = build_indicator_rows(
+            evaluation_id, ISOIndicator.LATENCY_P99_DEGRADATION,
+            None, scope, p99_deg_result, _FV_LATENCY_P99_DEGRADATION_BLACKBOX,
+        )
+        if row:
+            rows.append(row)
+
+        # Processing-phase degradation (SNR-isolated)
+        if proc_scopes_by_phase is not None:
+            proc_baseline = proc_scopes_by_phase[MetricPhase.BASELINE].get(scope, [])
+            proc_fault = proc_scopes_by_phase[MetricPhase.FAULT].get(scope, [])
+
+            p95_proc_deg = compute_latency_p95_degradation_blackbox(proc_baseline, proc_fault)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.LATENCY_P95_DEGRADATION,
+                None, scope, p95_proc_deg, _FV_LATENCY_P95_DEGRADATION_BLACKBOX_PROC,
+            )
+            if row:
+                rows.append(row)
+
+            p99_proc_deg = compute_latency_p99_degradation_blackbox(proc_baseline, proc_fault)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.LATENCY_P99_DEGRADATION,
+                None, scope, p99_proc_deg, _FV_LATENCY_P99_DEGRADATION_BLACKBOX_PROC,
+            )
+            if row:
+                rows.append(row)

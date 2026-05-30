@@ -32,6 +32,25 @@ _FV_SUCCESS_RATE_DEGRADATION = "iso25010.fault_tolerance.success_rate_ratio.v1"
 _FV_LATENCY_P95_DEGRADATION = "iso25010.fault_tolerance.latency_p95_ratio.v1"
 _FV_LATENCY_P99_DEGRADATION = "iso25010.fault_tolerance.latency_p99_ratio.v1"
 
+
+_FV_RESPONSE_TIME_P95_BLACKBOX        = "iso25023.ptb2g.p95.blackbox.v1"
+_FV_RESPONSE_TIME_P99_BLACKBOX        = "iso25023.ptb2g.p99.blackbox.v1"
+_FV_ERROR_RATE_BLACKBOX               = "iso25010.error_rate.blackbox.v1"
+_FV_SUCCESS_RATE_DEGRADATION_BLACKBOX = "iso25010.fault_tolerance.success_rate_ratio.blackbox.v1"
+_FV_LATENCY_P95_DEGRADATION_BLACKBOX  = "iso25010.fault_tolerance.latency_p95_ratio.blackbox.v1"
+_FV_LATENCY_P99_DEGRADATION_BLACKBOX  = "iso25010.fault_tolerance.latency_p99_ratio.blackbox.v1"
+
+
+_FV_RESPONSE_TIME_P95_BLACKBOX_PROC        = "iso25023.ptb2g.p95.blackbox.proc.v1"
+_FV_RESPONSE_TIME_P99_BLACKBOX_PROC        = "iso25023.ptb2g.p99.blackbox.proc.v1"
+_FV_LATENCY_P95_DEGRADATION_BLACKBOX_PROC  = "iso25010.fault_tolerance.latency_p95_ratio.blackbox.proc.v1"
+_FV_LATENCY_P99_DEGRADATION_BLACKBOX_PROC  = "iso25010.fault_tolerance.latency_p99_ratio.blackbox.proc.v1"
+
+_FV_RESPONSE_TIME_P95_LINKERD_SUCCESS      = "iso25023.ptb2g.p95.linkerd.success.v1"
+_FV_RESPONSE_TIME_P99_LINKERD_SUCCESS      = "iso25023.ptb2g.p99.linkerd.success.v1"
+_FV_LATENCY_P95_DEG_LINKERD_SUCCESS        = "iso25010.ft.lat_p95_ratio.linkerd.success.v1"
+_FV_LATENCY_P99_DEG_LINKERD_SUCCESS        = "iso25010.ft.lat_p99_ratio.linkerd.success.v1"
+
 async def extract_baseline_metrics(
     vm_client: VictoriaMetricsClient,
     catalog: MetricCatalog,
@@ -540,6 +559,310 @@ def compute_latency_p99_degradation(
 ) -> dict[str, Any]:
     """(P99_fault - P99_baseline) / P99_baseline dari linkerd_response_latency_p99_ms"""
     return _compute_latency_degradation(baseline_samples, fault_samples, "p99")
+
+
+# ---------------------------------------------------------------------------
+# Blackbox-sourced compute functions (parallel to Linkerd-based above)
+# ---------------------------------------------------------------------------
+
+def _percentile_from_samples(
+    samples: list[RawMetricSample],
+    percentile: float,
+) -> tuple[float | None, int]:
+    """Return (percentile_value, n_used) from scalar gauge samples.
+
+    percentile in (0, 1). Falls back gracefully when sample count too small.
+    """
+    values = [s.value for s in samples if s.value is not None]
+    n = len(values)
+    if n == 0:
+        return None, 0
+    if n == 1:
+        return values[0], 1
+    idx = max(0, min(98, int(round(percentile * 100)) - 1))
+    quantiles = statistics.quantiles(values, n=100, method="inclusive")
+    return quantiles[idx], n
+
+
+def _compute_response_time_percentile_blackbox(
+    samples: list[RawMetricSample],
+    percentile: float,
+    label: str,
+) -> dict[str, Any]:
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    val, n = _percentile_from_samples(samples, percentile)
+    if val is None:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    peak = max(values) if values else None
+    return {
+        "value": round(val, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            f"{label}_seconds": round(val, 6),
+            "peak_seconds": round(peak, 6) if peak is not None else None,
+            "n_used": n,
+        },
+    }
+
+
+def compute_response_time_p95_blackbox(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """P95 dari probe_duration_seconds (blackbox HTTP atau gRPC)."""
+    return _compute_response_time_percentile_blackbox(samples, 0.95, "p95")
+
+
+def compute_response_time_p99_blackbox(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """P99 dari probe_duration_seconds (blackbox HTTP atau gRPC)."""
+    return _compute_response_time_percentile_blackbox(samples, 0.99, "p99")
+
+
+def compute_error_rate_blackbox_http(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """ERROR_RATE dari probe_http_status_code.
+
+    Klasifikasi error: status == 0 (connect failed) atau status >= 500.
+    4xx dianggap response valid (service merespond, hanya client error).
+    """
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    errors = sum(1 for v in values if v == 0 or v >= 500)
+    rate = errors / len(values)
+    return {
+        "value": round(rate, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "error_count": errors,
+            "total_probes": len(values),
+            "classifier": "http_status",
+        },
+    }
+
+
+def compute_error_rate_blackbox_grpc(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """ERROR_RATE dari probe_grpc_status_code.
+
+    Klasifikasi error: status != 0 (non-OK di gRPC).
+    """
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    errors = sum(1 for v in values if v != 0)
+    rate = errors / len(values)
+    return {
+        "value": round(rate, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "error_count": errors,
+            "total_probes": len(values),
+            "classifier": "grpc_status",
+        },
+    }
+
+
+def compute_success_rate_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(SR_baseline - SR_fault) / SR_baseline dari probe_success.
+
+    Tidak rentan terhadap sample-selection bias karena probe synthetic
+    selalu menghasilkan data point bahkan saat target unreachable.
+    """
+    baseline_vals = [s.value for s in baseline_samples if s.value is not None]
+    fault_vals = [s.value for s in fault_samples if s.value is not None]
+    if not baseline_vals or not fault_vals:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    sr_baseline = sum(baseline_vals) / len(baseline_vals)
+    sr_fault = sum(fault_vals) / len(fault_vals)
+
+    if sr_baseline == 0.0:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": {"note": "baseline_success_rate_zero"},
+        }
+
+    return {
+        "value": round((sr_baseline - sr_fault) / sr_baseline, 6),
+        "sample_count": len(baseline_samples) + len(fault_samples),
+        "episode_count": 0,
+        "extra": {
+            "sr_baseline": round(sr_baseline, 6),
+            "sr_fault": round(sr_fault, 6),
+        },
+    }
+
+
+def _compute_latency_percentile_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+    percentile: float,
+    label: str,
+) -> dict[str, Any]:
+    if not baseline_samples or not fault_samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    p_baseline, n_b = _percentile_from_samples(baseline_samples, percentile)
+    p_fault, n_f = _percentile_from_samples(fault_samples, percentile)
+
+    if p_baseline is None or p_fault is None:
+        return {
+            "value": None,
+            "sample_count": len(baseline_samples) + len(fault_samples),
+            "episode_count": 0,
+            "extra": None,
+        }
+
+    if p_baseline == 0.0:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": {"note": f"baseline_{label}_zero"},
+        }
+
+    return {
+        "value": round((p_fault - p_baseline) / p_baseline, 6),
+        "sample_count": len(baseline_samples) + len(fault_samples),
+        "episode_count": 0,
+        "extra": {
+            f"{label}_baseline_seconds": round(p_baseline, 6),
+            f"{label}_fault_seconds": round(p_fault, 6),
+            "n_baseline": n_b,
+            "n_fault": n_f,
+        },
+    }
+
+
+def compute_latency_p95_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P95_fault - P95_baseline) / P95_baseline dari probe_duration_seconds."""
+    return _compute_latency_percentile_degradation_blackbox(
+        baseline_samples, fault_samples, 0.95, "p95"
+    )
+
+
+def compute_latency_p99_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P99_fault - P99_baseline) / P99_baseline dari probe_duration_seconds."""
+    return _compute_latency_percentile_degradation_blackbox(
+        baseline_samples, fault_samples, 0.99, "p99"
+    )
+
+
+async def extract_baseline_metrics_blackbox(
+    vm_client: VictoriaMetricsClient,
+    catalog: MetricCatalog,
+    namespace: str,
+    target_label: str,
+    baseline_start: datetime,
+    baseline_end: datetime,
+    *,
+    service_protocol: str = "http",
+) -> dict[str, float | None]:
+    """Pull blackbox-sourced baseline values (parallel to extract_baseline_metrics).
+
+    service_protocol: "http" or "grpc" — picks the right probe job.
+    Returns keys suffixed with `_blackbox` so they coexist with Linkerd keys
+    in the same baseline_metrics JSON column.
+    """
+    if service_protocol == "grpc":
+        duration_metric = "probe_duration_seconds_grpc"
+        success_metric = "probe_success_grpc"
+        status_metric = "probe_grpc_status_code"
+    else:
+        duration_metric = "probe_duration_seconds_http"
+        success_metric = "probe_success_htttp"
+        status_metric = "probe_http_status_code"
+
+    target_name = (
+        target_label.split("=", 1)[1].strip()
+        if "=" in target_label
+        else target_label
+    )
+    params = {"ns": namespace, "window": "30s"}
+    result: dict[str, float | None] = {}
+
+    async def _query_mean(metric_name: str) -> float | None:
+        try:
+            definition = catalog.get(metric_name)
+        except KeyError:
+            logger.warning("Baseline blackbox metric not in catalog: %s", metric_name)
+            return None
+        promql = definition.render(params)
+        try:
+            resp = await vm_client.range_query(
+                promql=promql,
+                start=baseline_start,
+                end=baseline_end,
+                step=definition.default_step,
+            )
+        except Exception as exc:
+            logger.warning("Baseline blackbox query failed for %s: %s", metric_name, exc)
+            return None
+        values: list[float] = []
+        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
+            if labels.get("service") and labels["service"] != target_name:
+                continue
+            values.append(value)
+        return (sum(values) / len(values)) if values else None
+
+    async def _query_percentile(metric_name: str, percentile: float) -> float | None:
+        try:
+            definition = catalog.get(metric_name)
+        except KeyError:
+            return None
+        promql = definition.render(params)
+        try:
+            resp = await vm_client.range_query(
+                promql=promql,
+                start=baseline_start,
+                end=baseline_end,
+                step=definition.default_step,
+            )
+        except Exception as exc:
+            logger.warning("Baseline blackbox query failed for %s: %s", metric_name, exc)
+            return None
+        values: list[float] = []
+        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
+            if labels.get("service") and labels["service"] != target_name:
+                continue
+            values.append(value)
+        if not values:
+            return None
+        if len(values) == 1:
+            return values[0]
+        idx = max(0, min(98, int(round(percentile * 100)) - 1))
+        return statistics.quantiles(values, n=100, method="inclusive")[idx]
+
+    result["baseline_success_rate_blackbox"] = await _query_mean(success_metric)
+    result["baseline_error_rate_blackbox"] = await _query_mean(status_metric)
+    result["baseline_p95_seconds_blackbox"] = await _query_percentile(duration_metric, 0.95)
+    result["baseline_p99_seconds_blackbox"] = await _query_percentile(duration_metric, 0.99)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
