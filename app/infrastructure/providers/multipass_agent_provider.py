@@ -1,13 +1,3 @@
-"""Multipass + k3s cluster provider — Agent variant.
-
-Delegates provisioning to a Go agent running on the host machine.
-The agent handles all Multipass and k3s operations locally, while
-the orchestrator communicates with it over HTTP.
-
-This replaces the SSH-based approach where long-lived SSH sessions
-were needed for the entire provisioning lifecycle.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -27,19 +17,13 @@ from app.infrastructure.providers.base import (
     ProgressCallback,
     ProvisionResult,
 )
+from app.infrastructure.config_values import load_cluster_profile
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class MultipassAgentProvider(ClusterProvider):
-    """Cluster provider backed by a Go provisioning agent on the host.
-
-    The agent runs as a lightweight HTTP server on the host machine,
-    executing Multipass and k3s commands locally. The orchestrator
-    submits tasks via REST API and polls for completion.
-    """
-
     def __init__(self) -> None:
         agent_host = settings.AGENT_HOST or settings.SSH_HOST
         self._base_url = f"http://{agent_host}:{settings.AGENT_PORT}"
@@ -61,8 +45,6 @@ class MultipassAgentProvider(ClusterProvider):
             agent_token=settings.AGENT_API_TOKEN,
             agent_host=agent_host,
         )
-
-    # ---- helpers ----
 
     async def _ensure_agent_running(self) -> None:
         """Ensure the agent is running, bootstrapping if needed."""
@@ -119,20 +101,18 @@ class MultipassAgentProvider(ClusterProvider):
     def _server_vm_name(cluster_name: str) -> str:
         return f"{cluster_name}-server"
 
-    # ---- ClusterProvider interface ----
 
     async def prepare_config(
         self,
         cluster_name: str,  # noqa: ARG002
         worker_count: int,
     ) -> dict[str, Any]:
-        """Return Multipass+k3s config. No DB access needed."""
+        profile = load_cluster_profile()
         return {
             "provider": "multipass_k3s",
             "worker_count": worker_count,
-            "vm_cpus": settings.VM_CPUS,
-            "vm_memory": settings.VM_MEMORY,
-            "vm_disk": settings.VM_DISK,
+            "server_profile": profile["server"],
+            "worker_profile": profile["worker"],
         }
 
     async def provision(
@@ -147,13 +127,16 @@ class MultipassAgentProvider(ClusterProvider):
         task_id = str(uuid.uuid4())
         worker_count = config.get("worker_count", 2)
 
+        profile = load_cluster_profile()
+        sizing = config.get("worker_profile", profile["worker"])
+        
         await self._client.submit_provision(
             task_id=task_id,
             cluster_name=cluster_name,
             worker_count=worker_count,
-            vm_cpus=config.get("vm_cpus", settings.VM_CPUS),
-            vm_memory=config.get("vm_memory", settings.VM_MEMORY),
-            vm_disk=config.get("vm_disk", settings.VM_DISK),
+            vm_cpus=sizing["cpus"],
+            vm_memory=sizing["memory"],
+            vm_disk=sizing["disk"],
             disable_traefik=settings.K3S_DISABLE_TRAEFIK,
         )
 

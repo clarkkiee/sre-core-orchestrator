@@ -1,7 +1,7 @@
 """Application configuration settings."""
 
 from pydantic_settings import BaseSettings
-
+from pathlib import Path
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "chaos-platform"
     VERSION: str = "1.0.0"
     LOG_LEVEL: str = "INFO"
+    CONFIG_DIR: str = str(Path(__file__).resolve().parents[2]/"config")
 
     # Database
     POSTGRES_HOST: str = "db"
@@ -51,9 +52,6 @@ class Settings(BaseSettings):
 
     # Multipass + k3s settings (used when CLUSTER_PROVIDER=multipass_k3s)
     MULTIPASS_BINARY: str = "/snap/bin/multipass"
-    VM_CPUS: int = 2
-    VM_MEMORY: str = "4G"
-    VM_DISK: str = "10G"
     K3S_DISABLE_TRAEFIK: bool = True
 
     # Provisioning Agent settings
@@ -83,28 +81,14 @@ class Settings(BaseSettings):
     GATEWAY_API_VERSION: str = "v1.4.0"
     LINKERD_INJECT_NAMESPACES: list[str] = ["default"]
 
-    # Monitoring stack images
-    VM_IMAGE: str = "victoriametrics/victoria-metrics:v1.108.1"
-    KSM_IMAGE: str = "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0"
-    VM_NODEPORT: int = 30090
-    BLACKBOX_IMAGE: str = "prom/blackbox-exporter:v0.25.0"
-
     # Deployment / Git settings
     GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108
 
-    # LitmusChaos
-    LITMUS_VERSION: str = "3.27.0"
-    LITMUS_RUNNER_IMAGE: str = "litmuschaos/go-runner:3.27.0"
-    
     # Cluster Readiness
     CLUSTER_READY_TIMEOUT_S: int = 60
     CLUSTER_READY_INTERVAL_S: int = 5
     CLUSTER_READY_REQUIRE_NO_ACTIVE_ENGINE: bool = True
 
-    # Litmus Probe defaults (global fallback for SLO thresholds).
-    # Resolution order: experiment.configuration["probes"]["thresholds"]
-    #               → deployment.probe_thresholds
-    #               → these PROBE_DEFAULT_* settings.
     PROBE_DEFAULT_SUCCESS_RATE_SLO: float = 0.95
     PROBE_DEFAULT_DEGRADED_SUCCESS_RATE_SLO: float = 0.80
     PROBE_DEFAULT_P99_RECOVERY_RATIO: float = 1.2

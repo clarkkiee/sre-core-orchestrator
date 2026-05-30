@@ -84,6 +84,7 @@ COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser pipeline/ ./pipeline/
 COPY --chown=appuser:appuser pyproject.toml ./
 COPY --chown=appuser:appuser scripts/entrypoint.sh ./
+COPY --chown=appuser:appuser config/ ./config
 
 RUN chmod +x entrypoint.sh
 

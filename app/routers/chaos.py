@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 
 from app.dependencies import ChaosServiceDep, CurrentUser
-from app.infrastructure.chaos.manifests import EXPERIMENT_TEMPLATES
+from app.infrastructure.chaos import experiments
 from app.schemas.chaos import (
     ChaosExperimentListResponse,
     ChaosExperimentResponse,
@@ -73,6 +73,6 @@ async def stop_experiment(
 @router.get("/experiment-types")
 async def list_experiment_types() -> list[dict[str, Any]]:
     return [
-        {"name": name, "tunables": list(tmpl["env"].keys())}
-        for name, tmpl in EXPERIMENT_TEMPLATES.items()
+        {"name": name, "tunables": list(experiments.get_experiment(name)["env"].keys())}
+        for name in experiments.experiment_names()
     ]

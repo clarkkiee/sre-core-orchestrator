@@ -8,5 +8,5 @@ env:
   PODS_AFFECTED_PERC: "0"
   SEQUENCE: "parallel"
   CONTAINER_RUNTIME: "containerd"
-  SOCKET_PATH: "/run/k3s/contained/containerd.sock"
+  SOCKET_PATH: "/run/k3s/containerd/containerd.sock"
   RAMP_TIME: "0"

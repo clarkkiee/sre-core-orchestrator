@@ -1,14 +1,3 @@
-"""Multipass + k3s cluster provider — SSH variant.
-
-Same logic as :mod:`multipass_k3s_provider` but executes all Multipass
-commands on a remote host via SSH.  This is the recommended approach
-when the orchestrator runs inside Docker and Multipass (snap) is only
-available on the host machine.
-
-The original ``multipass_k3s_provider.py`` (local subprocess) is kept
-intact for reference / direct-host deployments.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -26,17 +15,12 @@ from app.infrastructure.providers.base import (
     ProvisionResult,
 )
 from app.utils.config import settings
+from app.infrastructure.config_values import load_cluster_profile
 
 logger = logging.getLogger(__name__)
 
 
 class MultipassK3sSSHProvider(ClusterProvider):
-    """Cluster provider backed by Multipass VMs running k3s, over SSH.
-
-    The SSH connection is established lazily on first use and kept alive
-    for the duration of the operation.  Cloud-init files are staged on the
-    remote host via SSH before ``multipass launch`` reads them.
-    """
 
     def __init__(self) -> None:
         self._ssh_config = SSHConfig(
@@ -47,8 +31,6 @@ class MultipassK3sSSHProvider(ClusterProvider):
             password=settings.SSH_PASSWORD,
         )
         self._cloud_init = CloudInitBuilder()
-
-    # ---- helpers ----
 
     def _build_ssh_manager(self) -> SSHManager:
         """Create a fresh SSHManager (one per operation)."""
@@ -80,13 +62,14 @@ class MultipassK3sSSHProvider(ClusterProvider):
         cluster_name: str,  # noqa: ARG002
         worker_count: int,
     ) -> dict[str, Any]:
-        """Return Multipass+k3s config. No DB access needed."""
+        
+        profile = load_cluster_profile()
+
         return {
             "provider": "multipass_k3s",
             "worker_count": worker_count,
-            "vm_cpus": settings.VM_CPUS,
-            "vm_memory": settings.VM_MEMORY,
-            "vm_disk": settings.VM_DISK,
+            "server_profile": profile["server"],
+            "worker_profile": profile["worker"],
         }
 
     async def provision(
@@ -95,18 +78,19 @@ class MultipassK3sSSHProvider(ClusterProvider):
         config: dict[str, Any],
         on_progress: ProgressCallback | None = None,
     ) -> ProvisionResult:
-        """Provision Multipass VMs and bootstrap k3s cluster via SSH."""
+        
+        profile = load_cluster_profile()
         worker_count = config.get("worker_count", 2)
-        cpus = config.get("vm_cpus", settings.VM_CPUS)
-        memory = config.get("vm_memory", settings.VM_MEMORY)
-        disk = config.get("vm_disk", settings.VM_DISK)
+        server = config.get("server_profile", profile["server"])        
+        worker = config.get("worker_profile", profile["worker"])        
+
 
         server_vm = self._server_vm_name(cluster_name)
 
         ssh = self._build_ssh_manager()
         async with ssh:
             mp = self._build_client(ssh)
-            k3s = K3sBootstrapper(mp)
+            k3s = K3sBootstrapper(mp) # type: ignore
 
             # Phase: BUILDING_CONFIG (5%)
             if on_progress:
@@ -130,9 +114,9 @@ class MultipassK3sSSHProvider(ClusterProvider):
 
                 await mp.launch_vm(
                     server_vm,
-                    cpus=cpus,
-                    memory=memory,
-                    disk=disk,
+                    cpus=server["cpus"],
+                    memory=server["memory"],
+                    disk=server["disk"],
                     cloud_init_file=server_ci_path,
                 )
                 await mp.wait_for_cloud_init(server_vm)
@@ -160,7 +144,7 @@ class MultipassK3sSSHProvider(ClusterProvider):
                     join_tasks.append(
                         self._launch_and_join_worker(
                             mp, k3s, worker_vm, server_ip, token,
-                            cpus=cpus, memory=memory, disk=disk,
+                            cpus=worker["cpus"], memory=worker["memory"], disk=worker["disk"],
                             cloud_init_file=agent_ci_path,
                         ),
                     )
@@ -219,7 +203,7 @@ class MultipassK3sSSHProvider(ClusterProvider):
         ssh = self._build_ssh_manager()
         async with ssh:
             mp = self._build_client(ssh)
-            k3s = K3sBootstrapper(mp)
+            k3s = K3sBootstrapper(mp) # type: ignore
 
             try:
                 server_ip = await mp.get_vm_ip(server_vm)

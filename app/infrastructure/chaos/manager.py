@@ -15,13 +15,9 @@ from app.infrastructure.chaos.exceptions import (
     LitmusDeployError,
     ClusterNotReadyError,
 )
-from app.infrastructure.chaos.manifests import (
-    EXPERIMENT_TEMPLATES,
-    build_chaos_engine,
-    build_chaos_experiment,
-    build_chaos_exporter,
-    build_namespaced_litmuschaos_rbac,
-)
+
+from app.infrastructure.chaos import experiments
+from app.infrastructure.config_values import get_renderer
 
 logger = logging.getLogger(__name__)
 
@@ -156,10 +152,14 @@ class LitmusChaosManager:
             )
 
             # Deploy chaos-exporter
-            for cex_manifest in build_chaos_exporter(namespace=_LITMUS_NS):
+            cex_manifests = get_renderer().render_to_dicts(
+                "litmus/chaos-exporter.yaml.j2",
+                namespace=_LITMUS_NS,
+            )
+            for manifest in cex_manifests:
                 await self._run_kubectl_apply_stdin(
                     kubeconfig_path=kc,
-                    manifest_yaml=yaml.safe_dump(cex_manifest)
+                    manifest_yaml=yaml.safe_dump(manifest)
                 )
 
             # Poll until chaos-operator-ce deployment is available
@@ -221,16 +221,20 @@ class LitmusChaosManager:
             v1 = client.CoreV1Api(api_client)
             rbac_v1 = client.RbacAuthorizationV1Api(api_client)
             custom = client.CustomObjectsApi(api_client)
-            rbac_manifests = build_namespaced_litmuschaos_rbac(namespace=namespace)
+            rbac_manifests = get_renderer().render_to_dicts(
+                "litmus/rbac.yaml.j2",
+                namespace=namespace
+            )
 
+            # ServiceAccount
             sa = rbac_manifests[0]
             try:
                 await v1.create_namespaced_service_account(namespace=namespace, body=sa) # pyright: ignore[reportArgumentType]
             except ApiException as e:
                 if e.status != _HTTP_CONFLICT:
                     raise
-
-            # Apply Role (create or replace)
+            
+            #  Role
             role = rbac_manifests[1]
             try:
                 await rbac_v1.create_namespaced_role(namespace=namespace, body=role) # pyright: ignore[reportArgumentType]
@@ -242,7 +246,7 @@ class LitmusChaosManager:
                 else:
                     raise
 
-            # Apply RoleBinding (create or replace)
+            # RoleBinding
             role_binding = rbac_manifests[2]
             try:
                 await rbac_v1.create_namespaced_role_binding(
@@ -259,12 +263,18 @@ class LitmusChaosManager:
                     raise
 
             # Apply ChaosExperiment templates (create or patch)
-            for exp_type in EXPERIMENT_TEMPLATES:
-                body = build_chaos_experiment(
+            renderer = get_renderer()
+            for exp_type in experiments.experiment_names():
+                exp_config = experiments.get_experiment(exp_type)
+                body = renderer.render_to_dicts(
+                    "litmus/chaos-experiment.yaml.j2",
                     experiment_type=exp_type,
                     namespace=namespace,
                     litmus_image=self._litmus_runner_image,
-                )
+                    args=exp_config["args"],
+                    env_vars=experiments.build_experiment_env_vars(exp_type),
+                    needs_runtime_socket=experiments.needs_runtime_socket(exp_type)
+                )[0]
                 try:
                     await custom.create_namespaced_custom_object(
                         namespace=namespace,
@@ -311,15 +321,17 @@ class LitmusChaosManager:
         configuration: dict[str, Any] | None = None,
         probes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        body = build_chaos_engine(
-            app_label=app_label,
-            duration=duration,
+        body = get_renderer().render_to_dicts(
+            "litmus/chaos-engine.yaml.j2",
             engine_name=engine_name,
-            experiment_type=experiment_type,
             namespace=namespace,
-            configuration=configuration,
+            app_label=app_label,
+            experiment_type=experiment_type,
+            env_vars=experiments.build_engine_env_vars(
+                experiment_type, duration, configuration
+            ),
             probes=probes,
-        )
+        )[0]
 
         api_client = await self._build_api_client(kubeconfig_content)
         try:
@@ -426,13 +438,13 @@ class LitmusChaosManager:
         require_no_active_engine: bool = True
     ) -> None:
         # check all nodes is ready, all pods matching target_label in namespace is ready
-        
+
         deadline = asyncio.get_event_loop().time() + timeout_s
         last_reason = "unknown"
-        
+
         while asyncio.get_event_loop().time() < deadline:
             api_client = await self._build_api_client(kubeconfig_content)
-            
+
             try:
                 # nodes ready check
                 core_v1 = client.CoreV1Api(api_client)
@@ -445,12 +457,12 @@ class LitmusChaosManager:
                         for c in (n.status.conditions or [])
                     )
                 ]
-                
+
                 if not_ready_nodes:
                     last_reason = f"nodes not ready: {not_ready_nodes}"
                     await asyncio.sleep(interval_s)
                     continue
-                
+
                 # target pods ready check
                 pods = await asyncio.wait_for(
                     core_v1.list_namespaced_pod(
@@ -463,7 +475,7 @@ class LitmusChaosManager:
                     last_reason = f"no pods matching label: '{target_label}'"
                     await asyncio.sleep(interval_s)
                     continue
-                
+
                 not_ready_pods = [
                     p.metadata.name
                     for p in pods.items
@@ -472,13 +484,13 @@ class LitmusChaosManager:
                         for c in (p.status.conditions or [])
                     )
                 ]
-                
+
                 if not_ready_pods:
                     last_reason = f"pods not ready: {not_ready_pods}"
                     await asyncio.sleep(interval_s)
                     continue
-                
-                
+
+
                 # no active chaos engine
                 if require_no_active_engine:
                     custom = client.CustomObjectsApi(api_client)
@@ -491,19 +503,19 @@ class LitmusChaosManager:
                         ),
                         timeout=10.0
                     )
-                    
+
                     active = [
                         e["metadata"]["name"]
                         for e in engines.get("items", [])
                         if e.get("status", {}).get("engineStatus")
                         not in (None, "completed", "stopped")
                     ]
-                    
+
                     if active:
                         last_reason = f"Active ChaoEngines: {active}"
                         await asyncio.sleep(interval_s)
                         continue
-                
+
                 logger.info(
                     "Cluster ready: namespace=%s target_label=%s",
                     namespace, target_label
@@ -515,5 +527,5 @@ class LitmusChaosManager:
                 await asyncio.sleep(interval_s)
             finally:
                 await api_client.close()
-                
+
         raise ClusterNotReadyError(last_reason, timeout_s)

@@ -20,6 +20,7 @@ from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
+from app.infrastructure.config_values import load_values
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,6 @@ _INJECTED_TIME_POLL_INTERVAL = 5.0
 
 # Runner pod scheduling + container startup + SOT probe execution.
 _PRE_CHAOS_OVERHEAD = 35
-# Safety margin on top of EOT overhead estimate to absorb scheduling jitter,
-# slow probe image pulls, and sequential EOT probe execution variance.
 _POST_CHAOS_OVERHEAD = 60
 
 # ---------------------------------------------------------------------------
@@ -106,10 +105,13 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
     experiment: ChaosExperiment,
 ) -> dict[str, str]:
     """Execute Chaos Experiment phases in order"""
+    
+    values = load_values()
+    
     litmus_manager = LitmusChaosManager(
         kubectl_binary=settings.KUBECTL_BINARY,
-        litmus_version=settings.LITMUS_VERSION,
-        litmus_runner_image=settings.LITMUS_RUNNER_IMAGE,
+        litmus_version=values["litmus"]["version"],
+        litmus_runner_image=values["litmus"]["runner_image"],
     )
 
     kubeconfig = cluster.kubeconfig
@@ -278,7 +280,7 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
 
         # Enqueue out-of-band so a metrics backend issue never fails the experiment.
         from app.tasks.evaluation_tasks import evaluate_experiment_task  # noqa: PLC0415
-        evaluate_experiment_task.delay(str(experiment.id))
+        evaluate_experiment_task.delay(str(experiment.id)) # type: ignore
         logger.info("Enqueued evaluation for experiment=%s", experiment.id)
 
     except Exception as e:

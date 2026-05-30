@@ -7,10 +7,6 @@ from typing import Any
 from app.infrastructure.chaos.discovery import discover_services
 from app.infrastructure.chaos.exceptions import ClusterNotReadyError
 from app.infrastructure.chaos.manager import LitmusChaosManager
-from app.infrastructure.chaos.manifests import (
-    _NEEDS_RUNTIME_SOCKET,
-    EXPERIMENT_TEMPLATES,
-)
 from app.infrastructure.chaos.probes import (
     build_probes,
     estimate_eot_probe_overhead_seconds,
@@ -33,6 +29,8 @@ from app.tasks.celery_config import celery_app
 from app.tasks.chaos_tasks import _POST_CHAOS_OVERHEAD, _PRE_CHAOS_OVERHEAD
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
+from app.infrastructure.chaos import experiments
+from app.infrastructure.config_values import load_values
 
 logger = logging.getLogger(__name__)
 
@@ -334,10 +332,13 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     vm_url: str | None = None,
 ) -> dict[str, str]:
     """Execute all campaign phases in order."""
+    
+    values = load_values()
+    
     litmus_manager = LitmusChaosManager(
         kubectl_binary=settings.KUBECTL_BINARY,
-        litmus_version=settings.LITMUS_VERSION,
-        litmus_runner_image=settings.LITMUS_RUNNER_IMAGE,
+        litmus_version=values["litmus"]["version"],
+        litmus_runner_image=values["litmus"]["runner_image"],
     )
 
     # ------------------------------------------------------------------
@@ -368,7 +369,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
         )
         raise RuntimeError(msg)
 
-    experiment_types = list(EXPERIMENT_TEMPLATES.keys())
+    experiment_types = experiments.experiment_names()
     total = len(experiment_types) * len(services)
 
     await campaign_repo.update(
@@ -425,11 +426,11 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
 
             # Build configuration for this experiment.
             config: dict[str, str] | None = None
-            if litmus_name in _NEEDS_RUNTIME_SOCKET:
+            if experiments.needs_runtime_socket(litmus_name):
                 config = {"TARGET_CONTAINER": service["container"]}
 
             # Determine default duration from the template.
-            template_env = EXPERIMENT_TEMPLATES[litmus_name]["env"]
+            template_env = experiments.get_experiment(litmus_name)["env"]
             duration = int(template_env.get("TOTAL_CHAOS_DURATION", "60"))
 
             experiment = ChaosExperiment(

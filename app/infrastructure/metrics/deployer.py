@@ -10,12 +10,7 @@ from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client import ApiClient, Configuration
 from kubernetes_asyncio.client.exceptions import ApiException
 
-from app.infrastructure.metrics.manifests import (
-    build_blackbox_exporter,
-    build_kube_state_metrics,
-    build_monitoring_namespace,
-    build_victoria_metrics,
-)
+from app.infrastructure.config_values import get_renderer
 
 logger = logging.getLogger(__name__)
 
@@ -49,17 +44,12 @@ class MonitoringStackDeployer:
         kubeconfig_content: str,
         control_plane_ip: str,
     ) -> str:
-        """Deploy the full monitoring stack.
-
-        Returns the VictoriaMetrics base URL reachable from outside
-        the cluster (e.g. ``http://<ip>:30090``).
-        """
         api_client = await self._build_api_client(kubeconfig_content)
         try:
             await self._apply_namespace(api_client)
             await self._apply_kube_state_metrics(api_client)
             await self._apply_blackbox_exporter(api_client)
-            await self._apply_victoria_metrics(api_client)
+            await self._apply_victoriametrics(api_client)
 
             logger.info("Waiting for monitoring pods to become ready")
             await self._wait_for_ready(
@@ -84,53 +74,47 @@ class MonitoringStackDeployer:
         logger.info("Monitoring stack deployed — VM URL: %s", vm_url)
         return vm_url
 
-    # manifest application
-
-    async def _apply_namespace(
-        self,
-        api_client: ApiClient,
-    ) -> None:
-        ns = build_monitoring_namespace()
+    async def _apply_namespace(self, api_client: ApiClient) -> None:
+        ns = get_renderer().render_to_dicts("monitoring/namespace.yaml")[0]
         v1 = client.CoreV1Api(api_client)
         try:
-            await v1.create_namespace(body=ns)  # type: ignore[unused-ignore]
+            await v1.create_namespace(body=ns) # type: ignore[unused-ignore]
             logger.info("Created namespace %s", _MONITORING_NS)
         except ApiException as exc:
             if exc.status == _HTTP_CONFLICT:
                 logger.info("Namespace %s already exists", _MONITORING_NS)
             else:
                 raise
-
-    async def _apply_blackbox_exporter(
-        self,
-        api_client: ApiClient,
-    ) -> None:
-        manifests = build_blackbox_exporter(self._bbe_image)
+    
+    async def _apply_blackbox_exporter(self, api_client: ApiClient) -> None:
+        manifests = get_renderer().render_to_dicts(
+            "monitoring/blackbox-exporter.yaml.j2", bbe_image=self._bbe_image
+        )
+        
         for m in manifests:
             await self._apply_manifest(api_client, m)
         logger.info("prometheus-blackbox-exporter manifests applied")
-
-    async def _apply_kube_state_metrics(
-        self,
-        api_client: ApiClient,
-    ) -> None:
-        manifests = build_kube_state_metrics(self._ksm_image)
+        
+    async def _apply_kube_state_metrics(self, api_client: ApiClient) -> None:
+        manifests = get_renderer().render_to_dicts(
+        "monitoring/kube-state-metrics.yaml.j2", ksm_image=self._ksm_image
+        )
+        
         for m in manifests:
             await self._apply_manifest(api_client, m)
         logger.info("kube-state-metrics manifests applied")
-
-    async def _apply_victoria_metrics(
-        self,
-        api_client: ApiClient,
-    ) -> None:
-        manifests = build_victoria_metrics(
-            self._vm_image,
-            self._vm_nodeport,
+        
+    async def _apply_victoriametrics(self, api_client: ApiClient) -> None:
+        manifests = get_renderer().render_to_dicts(
+            "monitoring/victoria-metrics.yaml.j2", 
+            vm_image=self._vm_image,
+            vm_nodeport=self._vm_nodeport
         )
+        
         for m in manifests:
             await self._apply_manifest(api_client, m)
-        logger.info("VictoriaMetrics manifests applied")
-
+        logger.info("victoriametrics manifests applied")
+        
     async def _apply_manifest(
         self,
         api_client: ApiClient,

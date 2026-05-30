@@ -18,6 +18,7 @@ from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
+from app.infrastructure.config_values import load_values
 
 logger = logging.getLogger(__name__)
 
@@ -137,11 +138,12 @@ async def _run_provisioning_phases(
 
     # Phase: DEPLOYING_MONITORING (70%)
     await on_progress("DEPLOYING_MONITORING", 70)
+    values = load_values()
     monitoring_deployer = MonitoringStackDeployer(
-        vm_image=settings.VM_IMAGE,
-        ksm_image=settings.KSM_IMAGE,
-        vm_nodeport=settings.VM_NODEPORT,
-        bbe_image=settings.BLACKBOX_IMAGE,
+        vm_image=values["monitoring"]["vm_image"],
+        ksm_image=values["monitoring"]["ksm_image"],
+        vm_nodeport=values["monitoring"]["vm_nodeport"],
+        bbe_image=values["monitoring"]["bbe_image"],
     )
     vm_url = await monitoring_deployer.deploy(
         result.kubeconfig_content,
@@ -163,8 +165,8 @@ async def _run_provisioning_phases(
     await on_progress("DEPLOYING_LITMUS", 85)
     litmus_manager = LitmusChaosManager(
         kubectl_binary=settings.KUBECTL_BINARY,
-        litmus_version=settings.LITMUS_VERSION,
-        litmus_runner_image=settings.LITMUS_RUNNER_IMAGE,
+        litmus_version=values["litmus"]["version"],
+        litmus_runner_image=values["litmus"]["runner_image"],
     )
     await litmus_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 

@@ -18,6 +18,7 @@ from app.infrastructure.providers.base import (
     ProvisionResult,
 )
 from app.utils.config import settings
+from app.infrastructure.config_values import load_cluster_profile
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +56,14 @@ class MultipassK3sProvider(ClusterProvider):
         cluster_name: str,  # noqa: ARG002
         worker_count: int,
     ) -> dict[str, Any]:
-        """Return Multipass+k3s config. No DB access needed."""
+
+        profile = load_cluster_profile()
+
         return {
             "provider": "multipass_k3s",
             "worker_count": worker_count,
-            "vm_cpus": settings.VM_CPUS,
-            "vm_memory": settings.VM_MEMORY,
-            "vm_disk": settings.VM_DISK,
+            "server_profile": profile["server"],
+            "worker_profile": profile["worker"],
         }
 
     async def provision(
@@ -70,11 +72,11 @@ class MultipassK3sProvider(ClusterProvider):
         config: dict[str, Any],
         on_progress: ProgressCallback | None = None,
     ) -> ProvisionResult:
-        """Provision Multipass VMs and bootstrap k3s cluster."""
+        
+        profile = load_cluster_profile()
         worker_count = config.get("worker_count", 2)
-        cpus = config.get("vm_cpus", settings.VM_CPUS)
-        memory = config.get("vm_memory", settings.VM_MEMORY)
-        disk = config.get("vm_disk", settings.VM_DISK)
+        server = config.get("server_profile", profile["server"])        
+        worker = config.get("worker_profile", profile["worker"])        
 
         server_vm = self._server_vm_name(cluster_name)
 
@@ -94,9 +96,9 @@ class MultipassK3sProvider(ClusterProvider):
 
             await self._mp.launch_vm(
                 server_vm,
-                cpus=cpus,
-                memory=memory,
-                disk=disk,
+                cpus=server["cpus"],
+                memory=server["memory"],
+                disk=server["disk"],
                 cloud_init_file=server_ci_path,
             )
             await self._mp.wait_for_cloud_init(server_vm)
@@ -124,7 +126,7 @@ class MultipassK3sProvider(ClusterProvider):
                 join_tasks.append(
                     self._launch_and_join_worker(
                         worker_vm, server_ip, token,
-                        cpus=cpus, memory=memory, disk=disk,
+                        cpus=worker["cpus"], memory=worker["memory"], disk=worker["disk"],
                         cloud_init_file=agent_ci_path,
                     ),
                 )

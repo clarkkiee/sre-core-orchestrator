@@ -11,6 +11,7 @@ services:
       - ./alembic:/app/alembic:cached
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./alembic.ini:/app/alembic.ini:cached
+      - ./config:/app/config:cached
     environment:
       - ENV=development
       - LOG_LEVEL=DEBUG
