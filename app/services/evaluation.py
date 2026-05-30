@@ -1,11 +1,14 @@
 """Evaluation service: fault window resolution and ISO/IEC 25023 indicator computation."""
 
 import logging
+import statistics
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.infrastructure.metrics.client import VictoriaMetricsClient
 from app.models.chaos import ChaosExperiment
+from app.infrastructure.metrics.catalog import MetricCatalog
+from app.infrastructure.metrics.query_engine import parse_range_response
 from app.models.evaluation_indicator import (
     ISOIndicator,
     MeasurementScope,
@@ -15,29 +18,101 @@ from app.models.raw_metric_sample import MetricPhase, RawMetricSample
 
 logger = logging.getLogger(__name__)
 
-RECOVERY_WINDOW_SECONDS = 120
+EVALUATION_WINDOW_SECONDS = 120
 
 # Formula version strings — bump when a formula changes so old rows coexist.
-_FV_MEAN_DOWN_TIME = "iso25023.rav2g.v1"
-_FV_MEAN_RECOVERY_TIME = "iso25023.rre1g.v1"
-
+_FV_MEAN_RECOVERY_TIME = "iso25023.rre1g.v3"
 _FV_AVAILABILITY_BLACKBOX_TCP = "iso25010.availability.blackbox_tcp.v1"
-_FV_AVAILABILITY_LINKERD = "iso25010.availability.linkerd.v1"
-_FV_AVAILABILITY_POD_READY = "iso25010.availability.pod_ready.v1"
-
-_FV_MEAN_TIME_TO_FAILURE        = "iso25023.mttf.v1"
+_FV_RESPONSE_TIME_P95           = "iso25023.ptb2g.p95.v1"
 _FV_RESPONSE_TIME_P99           = "iso25023.ptb2g.p99.v1"
 _FV_ERROR_RATE                  = "iso25010.error_rate.v1"
 _FV_CPU_UTILIZATION             = "iso25023.pru1g.v1"
 _FV_MEMORY_UTILIZATION          = "iso25023.pru2g.v1"
-_FV_FAULT_TOLERANCE_RATIO       = "iso25010.fault_tolerance_ratio.linkerd.v1"
-_FV_AVAILABILITY_LINKERD_RATIO  = "iso25010.availability.linkerd_ratio.v1"
 _FV_SUCCESS_RATE_DEGRADATION = "iso25010.fault_tolerance.success_rate_ratio.v1"
+_FV_LATENCY_P95_DEGRADATION = "iso25010.fault_tolerance.latency_p95_ratio.v1"
 _FV_LATENCY_P99_DEGRADATION = "iso25010.fault_tolerance.latency_p99_ratio.v1"
+
+
+_FV_RESPONSE_TIME_P95_BLACKBOX        = "iso25023.ptb2g.p95.blackbox.v1"
+_FV_RESPONSE_TIME_P99_BLACKBOX        = "iso25023.ptb2g.p99.blackbox.v1"
+_FV_ERROR_RATE_BLACKBOX               = "iso25010.error_rate.blackbox.v1"
+_FV_SUCCESS_RATE_DEGRADATION_BLACKBOX = "iso25010.fault_tolerance.success_rate_ratio.blackbox.v1"
+_FV_LATENCY_P95_DEGRADATION_BLACKBOX  = "iso25010.fault_tolerance.latency_p95_ratio.blackbox.v1"
+_FV_LATENCY_P99_DEGRADATION_BLACKBOX  = "iso25010.fault_tolerance.latency_p99_ratio.blackbox.v1"
+
+
+_FV_RESPONSE_TIME_P95_BLACKBOX_PROC        = "iso25023.ptb2g.p95.blackbox.proc.v1"
+_FV_RESPONSE_TIME_P99_BLACKBOX_PROC        = "iso25023.ptb2g.p99.blackbox.proc.v1"
+_FV_LATENCY_P95_DEGRADATION_BLACKBOX_PROC  = "iso25010.fault_tolerance.latency_p95_ratio.blackbox.proc.v1"
+_FV_LATENCY_P99_DEGRADATION_BLACKBOX_PROC  = "iso25010.fault_tolerance.latency_p99_ratio.blackbox.proc.v1"
+
+_FV_RESPONSE_TIME_P95_LINKERD_SUCCESS      = "iso25023.ptb2g.p95.linkerd.success.v1"
+_FV_RESPONSE_TIME_P99_LINKERD_SUCCESS      = "iso25023.ptb2g.p99.linkerd.success.v1"
+_FV_LATENCY_P95_DEG_LINKERD_SUCCESS        = "iso25010.ft.lat_p95_ratio.linkerd.success.v1"
+_FV_LATENCY_P99_DEG_LINKERD_SUCCESS        = "iso25010.ft.lat_p99_ratio.linkerd.success.v1"
+
+async def extract_baseline_metrics(
+    vm_client: VictoriaMetricsClient,
+    catalog: MetricCatalog,
+    namespace: str,
+    target_label: str,
+    baseline_start: datetime,
+    baseline_end: datetime,
+) -> dict[str, float | None]:
+    
+    metric_to_key = {
+        "linkerd_response_latency_p99_ms": "baseline_p99_ms",
+        "linkerd_response_latency_p95_ms": "baseline_p95_ms",
+        "linkerd_success_rate": "baseline_success_rate",
+        "linkerd_error_rate": "baseline_error_rate",
+    }
+    
+    target_name = (
+        target_label.split("=", 1)[1].strip()
+        if "=" in target_label else target_label
+    )
+    
+    params = {"ns": namespace, "window": "30s"}
+    result: dict[str, float | None] = {}
+    
+    for metric_name, key in metric_to_key.items():
+
+        try:
+            definition = catalog.get(metric_name)
+        except KeyError as e:
+            logger.warning("Baseline metric not in catalog")
+            result[key] = None
+            continue
+        
+        promql = definition.render(params)
+        try:
+            resp = await vm_client.range_query(
+                promql=promql,
+                start=baseline_start,
+                end=baseline_end,
+                step=definition.default_step
+            )
+        except Exception as e:
+            logger.warning(
+                "Baseline metric query failed for %s: %s",
+                metric_name, e
+            )
+            result[key] = None
+            continue
+        
+        values: list[float] = []
+        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
+            if labels.get("workload") and labels["workload"] != target_name:
+                continue
+            values.append(value)
+            
+        result[key] = (sum(values) / len(values)) if values else None
+        
+    return result
+
 
 class FaultWindowResolutionError(Exception):
     pass
-
 
 class PhaseWindows:
     __slots__ = (
@@ -54,7 +129,7 @@ class PhaseWindows:
         fault_start: datetime,
         fault_end: datetime,
     ) -> None:
-        delta = timedelta(seconds=RECOVERY_WINDOW_SECONDS)
+        delta = timedelta(seconds=EVALUATION_WINDOW_SECONDS)
         self.fault_start = fault_start
         self.fault_end = fault_end
         self.baseline_start = fault_start - delta
@@ -172,100 +247,78 @@ def compute_system_availability(
         "extra": {"step_seconds": step},
     }
 
-def compute_mean_down_time(
-    samples: list[RawMetricSample],
-) -> dict[str, Any]:
-    """RAv-2-G: X = total_down_time / N_breakdowns.
-
-    Returns None if there are no failure episodes.
-    """
-    if not samples:
-        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
-
-    step = _infer_step(samples)
-    episodes = _detect_episodes(samples)
-
-    if not episodes:
-        return {
-            "value": 0.0,
-            "sample_count": len(samples),
-            "episode_count": 0,
-            "extra": {"step_seconds": step},
-        }
-
-    down_intervals = [
-        (ep_end - ep_start).total_seconds() + step
-        for ep_start, ep_end in episodes
-    ]
-    total_down = sum(down_intervals)
-    mdt = total_down / len(episodes)
-
-    ep_serialized = [
-        [ep_start.isoformat(), ep_end.isoformat()]
-        for ep_start, ep_end in episodes
-    ]
-    return {
-        "value": round(mdt, 3),
-        "sample_count": len(samples),
-        "episode_count": len(episodes),
-        "extra": {"step_seconds": step, "down_episodes": ep_serialized},
-    }
-
 def compute_mean_recovery_time(
     fault_samples: list[RawMetricSample],
     recovery_samples: list[RawMetricSample],
-    fault_end: datetime,
-    recovery_threshold: float = 0.95,
-    baseline_reference: float = 1.0,
-    binary_signal: bool = False,
+    step_seconds: float = 5.0
 ) -> dict[str, Any]:
-    """RRe-1-G: X = Σ Aᵢ / n  where Aᵢ = time from fault_end to first UP in recovery.
+    
+    all_samples = sorted(
+        [s for s in (fault_samples + recovery_samples) if s.value is not None],
+        key=lambda s: s.timestamp
+    )
+    
+    if not all_samples:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": None,
+        }
+        
+    episodes: list[tuple[datetime, datetime]] = []
+    ep_start: datetime | None = None
+    ep_last: datetime | None = None
 
-    If service is already UP at fault_end (never went down), MRT = 0.
-    If service never recovered within the recovery window, the last sample timestamp
-    is used as a conservative upper bound.
-    """
-    if not fault_samples:
-        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
-
-    if binary_signal:
-        episodes = _detect_episodes(fault_samples)
-        effective_threshold = 1.0
-    else:
-        episodes = _detect_episodes_ratio(fault_samples, threshold=baseline_reference*recovery_threshold)
-        effective_threshold = baseline_reference * recovery_threshold
-
+    for s in all_samples:
+        is_down = (s.value == 0.0)
+        if is_down:
+            if ep_start is None:
+                ep_start = s.timestamp
+            ep_last = s.timestamp
+        else:
+            if ep_start is not None and ep_last is not None:
+                episodes.append((ep_start, ep_last))
+                ep_start = None
+                ep_last = None
+                
+    # jika episode kegagalan masih terbuka hingga akhir window
+    incomplete = ep_start is not None and ep_last is not None
+    if incomplete:
+        episodes.append((ep_start, ep_last))  # type: ignore
+        
     if not episodes:
         return {
             "value": 0.0,
-            "sample_count": len(fault_samples),
+            "sample_count": len(all_samples),
             "episode_count": 0,
-            "extra": {"note": "no_failure_episodes"},
+            "extra": {
+                "note": "no_failure_episodes",
+                "source": "probe_success"
+            }
         }
-
-    recovery_sorted = sorted(recovery_samples, key=lambda s: s.timestamp)
-
-    t_recovered: datetime | None = next(
-        (s.timestamp for s in recovery_sorted if s.value is not None
-         and (s.value == 1.0 if binary_signal else s.value >= effective_threshold)),
-        None,
-    )
-
-    if t_recovered is None:
-        t_recovered = recovery_sorted[-1].timestamp if recovery_sorted else fault_end
-
-    mrt = max((t_recovered - fault_end).total_seconds(), 0.0)
-
+    
+    durations = [
+        (end - start).total_seconds() + step_seconds
+        for start, end in episodes
+    ]
+    
+    mrt = sum(durations) / len(durations)
+    
+    extra: dict[str, Any] = {
+        "source": "probe_success",
+        "episode_durations_s": [round(d, 3) for d in durations],
+        "step_seconds": step_seconds,
+    }
+    
+    if incomplete:
+        extra["note"] = "incomplete_recovery"
+    
     return {
         "value": round(mrt, 3),
-        "sample_count": len(fault_samples) + len(recovery_samples),
+        "sample_count": len(all_samples),
         "episode_count": len(episodes),
-        "extra": {
-            "fault_end": fault_end.isoformat(),
-            "t_recovered": t_recovered.isoformat(),
-            "effective_threshold": round(effective_threshold, 6),
-            "baseline_reference":  round(baseline_reference, 6),
-        },
+        "extra": extra
     }
 
 def _detect_episodes_ratio(
@@ -289,61 +342,45 @@ def _detect_episodes_ratio(
 
     return episodes
 
-def compute_response_time_p99(
-    samples: list[RawMetricSample]
+def _compute_response_latency(
+    samples: list[RawMetricSample],
 ) -> dict[str, Any]:
+    """Shared core for percentile latency indicators (p95/p99).
+
+    Caller is responsible for sourcing the right histogram_quantile samples
+    (e.g. linkerd_response_latency_p95_ms vs _p99_ms) and tagging the resulting
+    indicator/formula_version accordingly.
+    """
     if not samples:
-        return {"value": None, "sample_count": 0, "episode_count": 0,"extra": None}
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
 
     values = [s.value for s in samples if s.value is not None]
     if not values:
-        return {"value": None, "sample_count": len(samples), "episode_count": 0,"extra": None}
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
 
-    mean_p99 = sum(values) / len(values)
-    peak_p99 = max(values)
+    mean_lat = sum(values) / len(values)
+    peak_lat = max(values)
 
     return {
-        "value": round(mean_p99, 3),
+        "value": round(mean_lat, 3),
         "sample_count": len(samples),
         "episode_count": 0,
         "extra": {
-            "mean_ms": round(mean_p99, 3),
-            "peak_ms": round(peak_p99, 3)
-        }
+            "mean_ms": round(mean_lat, 3),
+            "peak_ms": round(peak_lat, 3),
+        },
     }
 
-def compute_mean_time_to_failure(
-    samples: list[RawMetricSample],
-    phase_start: datetime
+
+def compute_response_time_p95(
+    samples: list[RawMetricSample]
 ) -> dict[str, Any]:
-    """MTTF: waktu dari phase_start ke first observed failure (probe_success=0)"""
+    return _compute_response_latency(samples)
 
-    if not samples:
-        return {"value": None, "sample_count": 0, "episode_count": 0,"extra": None}
-
-    sorted_samples = sorted(samples, key=lambda s: s.timestamp)
-    first_failure = next((s for s in sorted_samples if s.value == 0.0), None)
-
-    if first_failure is None:
-        return {
-            "value": None,
-            "sample_count": len(samples),
-            "episode_count": 0,
-            "extra": {
-                "note": "no_failure_in_phase"
-            }
-        }
-
-    mttf = max((first_failure.timestamp - phase_start).total_seconds(), 0.0)
-    return {
-        "value": round(mttf, 3),
-        "sample_count": len(samples),
-        "episode_count": 1,
-        "extra": {
-            "phase_start": phase_start.isoformat(),
-            "first_failure_at": first_failure.timestamp.isoformat()
-        }
-    }
+def compute_response_time_p99(
+    samples: list[RawMetricSample]
+) -> dict[str, Any]:
+    return _compute_response_latency(samples)
 
 def compute_error_rate(
     samples: list[RawMetricSample]
@@ -434,69 +471,6 @@ def compute_memory_utilization(
         }
     }
 
-def compute_availability_ratio(
-    samples: list[RawMetricSample],
-) -> dict[str, Any]:
-    """Request-based availability, berbeda dengan system availability yang time-based"""
-
-    if not samples:
-        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
-
-    values = [s.value for s in samples if s.value is not None and 0.0 <= s.value <= 1.0]
-
-    if not values:
-        return {
-            "value": None,
-            "sample_count": len(samples),
-            "episode_count": 0,
-            "extra": None
-        }
-
-    mean_av = sum(values) / len(values)
-
-    return {
-        "value": round(mean_av, 6),
-        "sample_count": len(values),
-        "episode_count": 0,
-        "extra": {"min_availability": round(min(values), 6)},
-    }
-
-def compute_fault_tolerance_ratio(
-    baseline_samples: list[RawMetricSample],
-    fault_samples: list[RawMetricSample]
-) -> dict[str, Any]:
-    baseline_values = [s.value for s in baseline_samples if s.value is not None]
-    fault_values = [s.value for s in fault_samples if s.value is not None]
-
-    if not baseline_values or not fault_values:
-        return {
-            "value": None,
-            "sample_count": 0,
-            "episode_count": 0,
-            "extra": None
-        }
-
-    sr_baseline = sum(baseline_values) / len(baseline_values)
-    sr_fault = sum(fault_values) / len(fault_values)
-
-    if sr_baseline == 0.0:
-        return {
-            "value": None,
-            "sample_count": 0,
-            "episode_count": 0,
-            "extra": {"note": "baseline_success_rate_zero"},
-        }
-
-    return {
-        "value": round(sr_fault / sr_baseline, 6),
-        "sample_count": len(baseline_samples) + len(fault_samples),
-        "episode_count": 0,
-        "extra": {
-            "sr_baseline": round(sr_baseline, 6),
-            "sr_fault": round(sr_fault, 6)
-        }
-    }
-
 def compute_success_rate_degradation(
     baseline_samples: list[RawMetricSample],
     fault_samples: list[RawMetricSample]
@@ -537,45 +511,358 @@ def compute_success_rate_degradation(
         }
     }
 
-def compute_latency_p99_degradation(
+def _compute_latency_degradation(
     baseline_samples: list[RawMetricSample],
-    fault_samples: list[RawMetricSample]
+    fault_samples: list[RawMetricSample],
+    percentile_label: str,
 ) -> dict[str, Any]:
-    """P99_fault / P99_baseline dari linkerd_response_latency_p99_ms"""
-
+    """Shared core: (P_fault - P_baseline) / P_baseline. percentile_label labels extra fields."""
     baseline_vals = [s.value for s in baseline_samples if s.value is not None]
     fault_vals = [s.value for s in fault_samples if s.value is not None]
 
     if not baseline_vals or not fault_vals:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    lat_baseline = sum(baseline_vals) / len(baseline_vals)
+    lat_fault = sum(fault_vals) / len(fault_vals)
+
+    if lat_baseline == 0.0:
         return {
             "value": None,
             "sample_count": 0,
             "episode_count": 0,
-            "extra": None
-        }
-
-    p99_baseline = sum(baseline_vals) / len(baseline_vals)
-    p99_fault = sum(fault_vals) / len(fault_vals)
-
-    if p99_baseline == 0.0:
-        return {
-            "value": None,
-            "sample_count": 0,
-            "episode_count": 0,
-            "extra": {
-                "note": "baseline_p99_zero"
-            }
+            "extra": {"note": f"baseline_{percentile_label}_zero"},
         }
 
     return {
-        "value": round((p99_fault - p99_baseline) / p99_baseline, 6),
+        "value": round((lat_fault - lat_baseline) / lat_baseline, 6),
         "sample_count": len(baseline_samples) + len(fault_samples),
         "episode_count": 0,
         "extra": {
-            "p99_baseline": round(p99_baseline, 6),
-            "p99_fault": round(p99_fault, 6)
-        }
+            f"{percentile_label}_baseline": round(lat_baseline, 6),
+            f"{percentile_label}_fault": round(lat_fault, 6),
+        },
     }
+
+
+def compute_latency_p95_degradation(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P95_fault - P95_baseline) / P95_baseline dari linkerd_response_latency_p95_ms"""
+    return _compute_latency_degradation(baseline_samples, fault_samples, "p95")
+
+
+def compute_latency_p99_degradation(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P99_fault - P99_baseline) / P99_baseline dari linkerd_response_latency_p99_ms"""
+    return _compute_latency_degradation(baseline_samples, fault_samples, "p99")
+
+
+# ---------------------------------------------------------------------------
+# Blackbox-sourced compute functions (parallel to Linkerd-based above)
+# ---------------------------------------------------------------------------
+
+def _percentile_from_samples(
+    samples: list[RawMetricSample],
+    percentile: float,
+) -> tuple[float | None, int]:
+    """Return (percentile_value, n_used) from scalar gauge samples.
+
+    percentile in (0, 1). Falls back gracefully when sample count too small.
+    """
+    values = [s.value for s in samples if s.value is not None]
+    n = len(values)
+    if n == 0:
+        return None, 0
+    if n == 1:
+        return values[0], 1
+    idx = max(0, min(98, int(round(percentile * 100)) - 1))
+    quantiles = statistics.quantiles(values, n=100, method="inclusive")
+    return quantiles[idx], n
+
+
+def _compute_response_time_percentile_blackbox(
+    samples: list[RawMetricSample],
+    percentile: float,
+    label: str,
+) -> dict[str, Any]:
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    val, n = _percentile_from_samples(samples, percentile)
+    if val is None:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    peak = max(values) if values else None
+    return {
+        "value": round(val, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            f"{label}_seconds": round(val, 6),
+            "peak_seconds": round(peak, 6) if peak is not None else None,
+            "n_used": n,
+        },
+    }
+
+
+def compute_response_time_p95_blackbox(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """P95 dari probe_duration_seconds (blackbox HTTP atau gRPC)."""
+    return _compute_response_time_percentile_blackbox(samples, 0.95, "p95")
+
+
+def compute_response_time_p99_blackbox(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """P99 dari probe_duration_seconds (blackbox HTTP atau gRPC)."""
+    return _compute_response_time_percentile_blackbox(samples, 0.99, "p99")
+
+
+def compute_error_rate_blackbox_http(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """ERROR_RATE dari probe_http_status_code.
+
+    Klasifikasi error: status == 0 (connect failed) atau status >= 500.
+    4xx dianggap response valid (service merespond, hanya client error).
+    """
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    errors = sum(1 for v in values if v == 0 or v >= 500)
+    rate = errors / len(values)
+    return {
+        "value": round(rate, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "error_count": errors,
+            "total_probes": len(values),
+            "classifier": "http_status",
+        },
+    }
+
+
+def compute_error_rate_blackbox_grpc(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """ERROR_RATE dari probe_grpc_status_code.
+
+    Klasifikasi error: status != 0 (non-OK di gRPC).
+    """
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    errors = sum(1 for v in values if v != 0)
+    rate = errors / len(values)
+    return {
+        "value": round(rate, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "error_count": errors,
+            "total_probes": len(values),
+            "classifier": "grpc_status",
+        },
+    }
+
+
+def compute_success_rate_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(SR_baseline - SR_fault) / SR_baseline dari probe_success.
+
+    Tidak rentan terhadap sample-selection bias karena probe synthetic
+    selalu menghasilkan data point bahkan saat target unreachable.
+    """
+    baseline_vals = [s.value for s in baseline_samples if s.value is not None]
+    fault_vals = [s.value for s in fault_samples if s.value is not None]
+    if not baseline_vals or not fault_vals:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    sr_baseline = sum(baseline_vals) / len(baseline_vals)
+    sr_fault = sum(fault_vals) / len(fault_vals)
+
+    if sr_baseline == 0.0:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": {"note": "baseline_success_rate_zero"},
+        }
+
+    return {
+        "value": round((sr_baseline - sr_fault) / sr_baseline, 6),
+        "sample_count": len(baseline_samples) + len(fault_samples),
+        "episode_count": 0,
+        "extra": {
+            "sr_baseline": round(sr_baseline, 6),
+            "sr_fault": round(sr_fault, 6),
+        },
+    }
+
+
+def _compute_latency_percentile_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+    percentile: float,
+    label: str,
+) -> dict[str, Any]:
+    if not baseline_samples or not fault_samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+
+    p_baseline, n_b = _percentile_from_samples(baseline_samples, percentile)
+    p_fault, n_f = _percentile_from_samples(fault_samples, percentile)
+
+    if p_baseline is None or p_fault is None:
+        return {
+            "value": None,
+            "sample_count": len(baseline_samples) + len(fault_samples),
+            "episode_count": 0,
+            "extra": None,
+        }
+
+    if p_baseline == 0.0:
+        return {
+            "value": None,
+            "sample_count": 0,
+            "episode_count": 0,
+            "extra": {"note": f"baseline_{label}_zero"},
+        }
+
+    return {
+        "value": round((p_fault - p_baseline) / p_baseline, 6),
+        "sample_count": len(baseline_samples) + len(fault_samples),
+        "episode_count": 0,
+        "extra": {
+            f"{label}_baseline_seconds": round(p_baseline, 6),
+            f"{label}_fault_seconds": round(p_fault, 6),
+            "n_baseline": n_b,
+            "n_fault": n_f,
+        },
+    }
+
+
+def compute_latency_p95_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P95_fault - P95_baseline) / P95_baseline dari probe_duration_seconds."""
+    return _compute_latency_percentile_degradation_blackbox(
+        baseline_samples, fault_samples, 0.95, "p95"
+    )
+
+
+def compute_latency_p99_degradation_blackbox(
+    baseline_samples: list[RawMetricSample],
+    fault_samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """(P99_fault - P99_baseline) / P99_baseline dari probe_duration_seconds."""
+    return _compute_latency_percentile_degradation_blackbox(
+        baseline_samples, fault_samples, 0.99, "p99"
+    )
+
+
+async def extract_baseline_metrics_blackbox(
+    vm_client: VictoriaMetricsClient,
+    catalog: MetricCatalog,
+    namespace: str,
+    target_label: str,
+    baseline_start: datetime,
+    baseline_end: datetime,
+    *,
+    service_protocol: str = "http",
+) -> dict[str, float | None]:
+    """Pull blackbox-sourced baseline values (parallel to extract_baseline_metrics).
+
+    service_protocol: "http" or "grpc" — picks the right probe job.
+    Returns keys suffixed with `_blackbox` so they coexist with Linkerd keys
+    in the same baseline_metrics JSON column.
+    """
+    if service_protocol == "grpc":
+        duration_metric = "probe_duration_seconds_grpc"
+        success_metric = "probe_success_grpc"
+        status_metric = "probe_grpc_status_code"
+    else:
+        duration_metric = "probe_duration_seconds_http"
+        success_metric = "probe_success_htttp"
+        status_metric = "probe_http_status_code"
+
+    target_name = (
+        target_label.split("=", 1)[1].strip()
+        if "=" in target_label
+        else target_label
+    )
+    params = {"ns": namespace, "window": "30s"}
+    result: dict[str, float | None] = {}
+
+    async def _query_mean(metric_name: str) -> float | None:
+        try:
+            definition = catalog.get(metric_name)
+        except KeyError:
+            logger.warning("Baseline blackbox metric not in catalog: %s", metric_name)
+            return None
+        promql = definition.render(params)
+        try:
+            resp = await vm_client.range_query(
+                promql=promql,
+                start=baseline_start,
+                end=baseline_end,
+                step=definition.default_step,
+            )
+        except Exception as exc:
+            logger.warning("Baseline blackbox query failed for %s: %s", metric_name, exc)
+            return None
+        values: list[float] = []
+        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
+            if labels.get("service") and labels["service"] != target_name:
+                continue
+            values.append(value)
+        return (sum(values) / len(values)) if values else None
+
+    async def _query_percentile(metric_name: str, percentile: float) -> float | None:
+        try:
+            definition = catalog.get(metric_name)
+        except KeyError:
+            return None
+        promql = definition.render(params)
+        try:
+            resp = await vm_client.range_query(
+                promql=promql,
+                start=baseline_start,
+                end=baseline_end,
+                step=definition.default_step,
+            )
+        except Exception as exc:
+            logger.warning("Baseline blackbox query failed for %s: %s", metric_name, exc)
+            return None
+        values: list[float] = []
+        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
+            if labels.get("service") and labels["service"] != target_name:
+                continue
+            values.append(value)
+        if not values:
+            return None
+        if len(values) == 1:
+            return values[0]
+        idx = max(0, min(98, int(round(percentile * 100)) - 1))
+        return statistics.quantiles(values, n=100, method="inclusive")[idx]
+
+    result["baseline_success_rate_blackbox"] = await _query_mean(success_metric)
+    result["baseline_error_rate_blackbox"] = await _query_mean(status_metric)
+    result["baseline_p95_seconds_blackbox"] = await _query_percentile(duration_metric, 0.95)
+    result["baseline_p99_seconds_blackbox"] = await _query_percentile(duration_metric, 0.99)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -629,17 +916,30 @@ def partition_by_scope(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _infer_step(samples: list[RawMetricSample]) -> float:
+def _infer_step(samples: list[RawMetricSample], default: float = 5.0) -> float:
     """Estimate the step interval in seconds from consecutive timestamps."""
     if len(samples) < 2:
-        return 10.0
-    deltas = [
-        (samples[i + 1].timestamp - samples[i].timestamp).total_seconds()
-        for i in range(min(5, len(samples) - 1))
-        if (samples[i + 1].timestamp - samples[i].timestamp).total_seconds() > 0
-    ]
-    return min(deltas) if deltas else 10.0
-
+        return default
+    
+    from collections import defaultdict
+    by_series = defaultdict(list)
+    
+    for s in samples:
+        key = frozenset(s.labels.items()) if s.labels else frozenset()
+        by_series[key].append(s.timestamp)
+        
+    series_steps = []
+    for ts_list in by_series.values():
+        if len(ts_list) < 2:
+            continue
+        ts_sorted = sorted(ts_list)
+        deltas = [(ts_sorted[i+1] - ts_sorted[i]).total_seconds()
+                  for i in range(len(ts_sorted) - 1)]
+        deltas = [d for d in deltas if d > 0]
+        if deltas:
+            series_steps.append(statistics.median(deltas))
+    return statistics.median(series_steps) if series_steps else default
+    
 
 def window_seconds(start: datetime, end: datetime) -> float:
     return (end - start).total_seconds()

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models import Base
@@ -92,6 +92,11 @@ class Deployment(Base):
         JSON,
         nullable=True,
         comment="Parsed .platform.yaml content",
+    )
+
+    probe_thresholds: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
     )
 
     status: Mapped[DeploymentStatus] = mapped_column(

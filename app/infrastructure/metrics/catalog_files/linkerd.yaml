@@ -37,6 +37,23 @@ metrics:
     default_step: "5s"
     labels_to_keep: [namespace, workload]
     scope_label_key: "workload"
+  - name: linkerd_response_latency_p95_ms
+    source: linkerd_proxy
+    description: "Response latency P95 aggregated to deployment via pod-name extraction"
+    promql_template: >
+      histogram_quantile(0.95,
+        sum(
+          label_replace(
+            rate(response_latency_ms_bucket{namespace="$ns", direction="inbound"}[$window]),
+            "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+          )
+        ) by (le, workload)
+      )
+    unit: histogram
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"
   - name: linkerd_response_latency_p99_ms
     source: linkerd_proxy
     description: "Response latency P99 aggregated to deployment via pod-name extraction"
@@ -45,6 +62,40 @@ metrics:
         sum(
           label_replace(
             rate(response_latency_ms_bucket{namespace="$ns", direction="inbound"}[$window]),
+            "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+          )
+        ) by (le, workload)
+      )
+    unit: histogram
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"
+  - name: linkerd_response_latency_p95_success_ms
+    source: linkerd_proxy
+    description: "Response latency P95 (success-only) — exclude server errors (5xx) dan no-response (empty status_code). Linkerd histogram tidak punya label classification, status_code dipakai sebagai proxy konsisten dengan definisi ERROR_RATE. Untuk gRPC: HTTP 200 setara success (gRPC trailer tidak visible di proxy histogram — limitasi diakui di LATENCY_DEFINITION.md)."
+    promql_template: >
+      histogram_quantile(0.95,
+        sum(
+          label_replace(
+            rate(response_latency_ms_bucket{namespace="$ns", direction="inbound", status_code!~"5..", status_code!=""}[$window]),
+            "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+          )
+        ) by (le, workload)
+      )
+    unit: histogram
+    value_type: histogram
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"
+  - name: linkerd_response_latency_p99_success_ms
+    source: linkerd_proxy
+    description: "Response latency P99 (success-only) — exclude server errors (5xx) dan no-response (empty status_code). Linkerd histogram tidak punya label classification, status_code dipakai sebagai proxy konsisten dengan definisi ERROR_RATE. Untuk gRPC: HTTP 200 setara success (gRPC trailer tidak visible di proxy histogram — limitasi diakui di LATENCY_DEFINITION.md)."
+    promql_template: >
+      histogram_quantile(0.99,
+        sum(
+          label_replace(
+            rate(response_latency_ms_bucket{namespace="$ns", direction="inbound", status_code!~"5..", status_code!=""}[$window]),
             "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
           )
         ) by (le, workload)

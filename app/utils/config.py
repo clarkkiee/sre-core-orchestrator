@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # Multipass + k3s settings (used when CLUSTER_PROVIDER=multipass_k3s)
     MULTIPASS_BINARY: str = "/snap/bin/multipass"
     VM_CPUS: int = 2
-    VM_MEMORY: str = "2G"
+    VM_MEMORY: str = "4G"
     VM_DISK: str = "10G"
     K3S_DISABLE_TRAEFIK: bool = True
 
@@ -95,6 +95,47 @@ class Settings(BaseSettings):
     # LitmusChaos
     LITMUS_VERSION: str = "3.27.0"
     LITMUS_RUNNER_IMAGE: str = "litmuschaos/go-runner:3.27.0"
+    
+    # Cluster Readiness
+    CLUSTER_READY_TIMEOUT_S: int = 60
+    CLUSTER_READY_INTERVAL_S: int = 5
+    CLUSTER_READY_REQUIRE_NO_ACTIVE_ENGINE: bool = True
+
+    # Litmus Probe defaults (global fallback for SLO thresholds).
+    # Resolution order: experiment.configuration["probes"]["thresholds"]
+    #               → deployment.probe_thresholds
+    #               → these PROBE_DEFAULT_* settings.
+    PROBE_DEFAULT_SUCCESS_RATE_SLO: float = 0.95
+    PROBE_DEFAULT_DEGRADED_SUCCESS_RATE_SLO: float = 0.80
+    PROBE_DEFAULT_P99_RECOVERY_RATIO: float = 1.2
+    PROBE_DEFAULT_LIVENESS_TIMEOUT_S: int = 3
+    PROBE_DEFAULT_LIVENESS_POLL_S: int = 5
+    PROBE_DEFAULT_RECOVERY_INITIAL_DELAY_S: int = 30
+    PROBE_DEFAULT_RECOVERY_RETRY: int = 9
+    PROBE_DEFAULT_RECOVERY_INTERVAL_S: int = 10
+    PROBE_DEFAULT_MEMORY_RESTART_MAX: int = 1
+    BASELINE_METRICS_ENABLED: bool = True
+    PROBE_LATENCY_TOLERANCE_FACTOR: float = 1.5
+    PROBE_SUCCESS_TOLERANCE_FACTOR: float = 0.95
+
+    # Probe target endpoint defaults (deployment can override via probe_thresholds).
+    PROBE_DEFAULT_TARGET_PORT: int = 80
+    PROBE_DEFAULT_TARGET_HEALTH_PATH: str = "/healthz"
+
+    # Absolute latency thresholds (ms) — used by promProbe SOT/EOT comparators.
+    PROBE_DEFAULT_P95_BASELINE_THRESHOLD_MS: int = 800
+    PROBE_DEFAULT_P95_RECOVERY_THRESHOLD_MS: int = 1200
+    PROBE_DEFAULT_P99_BASELINE_THRESHOLD_MS: int = 1000
+    PROBE_DEFAULT_P99_RECOVERY_THRESHOLD_MS: int = 1500
+
+    # Linkerd PromQL rate window for success-rate / latency probes.
+    PROBE_DEFAULT_LINKERD_WINDOW: str = "120s"
+    PROBE_DEFAULT_RECOVERY_PROBE_WINDOW: str = "30s"
+
+    # Container images for cmdProbe source-mode.
+    PROBE_DEFAULT_CMD_PROBE_IMAGE: str = "curlimages/curl:8.6.0"
+    PROBE_DEFAULT_TCP_CMD_PROBE_IMAGE: str = "nicolaka/netshoot:latest"
+    PROBE_DEFAULT_KUBECTL_PROBE_IMAGE: str = "bitnami/kubectl:1.28"
 
     @property
     def DATABASE_URL(self) -> str:  # noqa: N802
@@ -123,6 +164,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()

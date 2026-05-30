@@ -12,6 +12,7 @@ _FV_SOURCE_MAP: dict[str, str] = {
     "blackbox_tcp": "blackbox_tcp",
     "linkerd":      "linkerd",
     "pod_ready":    "pod_ready",
+    "probe": "probe"
 }
 
 def _source_from_fv(formula_version: str) -> str:
@@ -30,10 +31,12 @@ def _format_value(indicator: str, raw: float) -> tuple[float, str]:
             return round(raw, 6), "cores"
         case "MEMORY_UTILIZATION":
             return round(raw / (1024 ** 2), 2), "MB"
-        case "RESPONSE_TIME_P95":
+        case "RESPONSE_TIME_P95" | "RESPONSE_TIME_P99":
             return round(raw, 3), "ms"
+        case "LATENCY_P95_DEGRADATION" | "LATENCY_P99_DEGRADATION" | "SUCCESS_RATE_DEGRADATION":
+            return round(raw, 6), "ratio"
         case _:
-            # MEAN_DOWN_TIME, MEAN_RECOVERY_TIME, MTTF = detik
+            # MEAN_RECOVERY_TIME = second
             return round(raw, 3), "s"
 
 class IndicatorEntryResponse(BaseModel):
@@ -58,7 +61,7 @@ class ExperimentSummaryResponse(BaseModel):
     target_namespace: str
     duration_seconds: int
     status: str
-    status_message: str
+    status_message: str | None
 
     model_config = {"from_attributes": True}
 

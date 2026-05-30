@@ -8,3 +8,75 @@ metrics:
     default_step: "5s"
     labels_to_keep: [namespace, service, instance, job]
     scope_label_key: "service"
+  - name: probe_success_htttp
+    source: blackbox_exporter
+    description: "HTTP-level Probe success (1 = HTTP 2xx, 0 = failure)"
+    promql_template: 'probe_success{namespace="$ns", job="blackbox-http"}'
+    unit: boolean
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"
+  - name: probe_success_grpc
+    source: blackbox_exporter
+    description: "gRPC-level Probe success (1 = gRPC health SERVING, 0 = failure)"
+    promql_template: 'probe_success{namespace="$ns", job="blackbox-grpc"}'
+    unit: boolean
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"
+  - name: probe_duration_seconds_http
+    source: blackbox_exporter
+    description: "End-to-end HTTP probe duration in seconds (includes timeout as full value)"
+    promql_template: 'probe_duration_seconds{namespace="$ns", job="blackbox-http"}'
+    unit: seconds
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"
+  - name: probe_duration_seconds_grpc
+    source: blackbox_exporter
+    description: "End-to-end gRPC probe duration in seconds (includes timeout as full value)"
+    promql_template: 'probe_duration_seconds{namespace="$ns", job="blackbox-grpc"}'
+    unit: seconds
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"
+  - name: probe_http_status_code
+    source: blackbox_exporter
+    description: "Last HTTP status code from blackbox-http probe (0 = connect failed, 2xx/4xx/5xx)"
+    promql_template: 'probe_http_status_code{namespace="$ns", job="blackbox-http"}'
+    unit: code
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"
+  - name: probe_grpc_status_code
+    source: blackbox_exporter
+    description: "Last gRPC status code from blackbox-grpc probe (0 = OK, non-zero = error)"
+    promql_template: 'probe_grpc_status_code{namespace="$ns", job="blackbox-grpc"}'
+    unit: code
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"
+  - name: probe_http_duration_seconds
+    source: blackbox_exporter
+    description: "HTTP probe duration broken down by phase (resolve, connect, tls, processing, transfer)"
+    promql_template: 'probe_http_duration_seconds{namespace="$ns", job="blackbox-http"}'
+    unit: seconds
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job, phase]
+    scope_label_key: "service"
+  - name: probe_http_duration_processing
+    source: blackbox_exporter
+    description: "HTTP probe processing-phase duration (server-side time, isolates handler latency from TCP/DNS/teardown overhead)"
+    promql_template: 'probe_http_duration_seconds{namespace="$ns", job="blackbox-http", phase="processing"}'
+    unit: seconds
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, service, instance, job]
+    scope_label_key: "service"

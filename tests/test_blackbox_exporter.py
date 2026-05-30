@@ -42,6 +42,12 @@ class TestBuildBlackboxExporter:
         assert "tcp_connect" in config["modules"]
         assert config["modules"]["tcp_connect"]["prober"] == "tcp"
 
+    def test_configmap_contains_grpc_module(self) -> None:
+        cm = build_blackbox_exporter(_TEST_IMAGE)[0]
+        config = yaml.safe_load(cm["data"]["blackbox.yml"])
+        assert "grpc" in config["modules"]
+        assert config["modules"]["grpc"]["prober"] == "grpc"
+
     # -- Deployment ------------------------------------------------------
 
     def test_deployment_uses_provided_image(self) -> None:
@@ -124,6 +130,30 @@ class TestScrapeConfigBlackbox:
         config = yaml.safe_load(build_scrape_config())
         job_names = [j["job_name"] for j in config["scrape_configs"]]
         assert "blackbox-tcp" in job_names
+
+    def test_contains_blackbox_grpc_job(self) -> None:
+        config = yaml.safe_load(build_scrape_config())
+        job_names = [j["job_name"] for j in config["scrape_configs"]]
+        assert "blackbox-grpc" in job_names
+
+    def test_blackbox_grpc_uses_grpc_module(self) -> None:
+        config = yaml.safe_load(build_scrape_config())
+        job = next(
+            j for j in config["scrape_configs"] if j["job_name"] == "blackbox-grpc"
+        )
+        assert job["params"]["module"] == ["grpc"]
+
+    def test_blackbox_grpc_keeps_only_grpc_port_names(self) -> None:
+        config = yaml.safe_load(build_scrape_config())
+        job = next(
+            j for j in config["scrape_configs"] if j["job_name"] == "blackbox-grpc"
+        )
+        keep_rules = [r for r in job["relabel_configs"] if r.get("action") == "keep"]
+        assert len(keep_rules) >= 1
+        assert any(
+            "service_port_name" in (r.get("source_labels", [None])[0] or "")
+            for r in keep_rules
+        )
 
     def test_blackbox_http_uses_http_2xx_module(self) -> None:
         config = yaml.safe_load(build_scrape_config())
