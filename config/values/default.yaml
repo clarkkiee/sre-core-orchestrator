@@ -1,0 +1,10 @@
+monitoring:
+  vm_image: "victoriametrics/victoria-metrics:v1.108.1"
+  ksm_image: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0"
+  bbe_image: "prom/blackbox-exporter:v0.25.0"
+  vm_nodeport: 30090
+
+litmus:
+  version: "3.27.0"
+  runner_image: "litmuschaos/go-runner:3.27.0"
+  exporter_image: "litmuschaos/chaos-exporter:3.28.0"

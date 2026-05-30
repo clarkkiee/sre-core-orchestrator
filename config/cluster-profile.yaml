@@ -1,0 +1,9 @@
+server:
+  cpus: 1
+  memory: "2G"
+  disk: "10G"
+
+worker:
+  cpus: 2
+  memory: "4G"
+  disk: "10G"

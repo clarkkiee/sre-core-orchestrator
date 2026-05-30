@@ -1,0 +1,38 @@
+---
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: {{ experiment_type }}
+  namespace: {{ namespace }}
+  labels:
+    name: {{ experiment_type }}
+    app.kubernetes.io/part-of: litmus
+spec:
+  definition:
+    scope: Namespaced
+    image: {{ litmus_image }}
+    command: ["/bin/bash"]
+    args: ["-c", "{{ args }}"]
+    env:
+      {% for var in env_vars %}
+      - name: {{ var.name }}
+        value: "{{ var.value }}"
+      {% endfor %}
+    labels:
+      name: {{ experiment_type }}
+      app.kubernetes.io/part-of: litmus
+      app.kubernetes.io/component: experiment-job
+    {% if needs_runtime_socket %}
+    hostPID: true
+    permissions:
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["get", "list", "delete", "deletecollection"]
+    securityContext:
+      podSecurityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      containerSecurityContext:
+        privileged: true
+        allowPrivilegeEscalation: true
+    {% endif %}

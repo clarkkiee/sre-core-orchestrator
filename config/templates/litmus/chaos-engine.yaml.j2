@@ -1,0 +1,32 @@
+---
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: {{ engine_name }}
+  namespace: {{ namespace }}
+spec:
+  appinfo:
+    appns: {{ namespace }}
+    applabel: {{ app_label }}
+    appkind: deployment
+  engineState: active
+  chaosServiceAccount: litmus-runner
+  components:
+    runner:
+      runnerAnnotation:
+        linkerd.io/inject: disabled
+  experiments:
+    - name: {{ experiment_type }}
+      spec:
+        components:
+          experimentAnnotations:
+            linkerd.io/inject: disabled
+          env:
+            {% for var in env_vars %}
+            - name: {{ var.name }}
+              value: "{{ var.value }}"
+            {% endfor %}
+        {% if probes %}
+        probe:
+          {{ probes | to_yaml | indent(10) }}
+        {% endif %}

@@ -1,0 +1,12 @@
+args: "./experiments -name pod-network-latency"
+needs_runtime_socket: true
+env:
+  TOTAL_CHAOS_DURATION: "120"
+  NETWORK_LATENCY: "2000"
+  JITTER: "0"
+  NETWORK_INTERFACE: "eth0"
+  PODS_AFFECTED_PERC: "0"
+  SEQUENCE: "parallel"
+  CONTAINER_RUNTIME: "containerd"
+  SOCKET_PATH: "/run/k3s/contained/containerd.sock"
+  RAMP_TIME: "0"
