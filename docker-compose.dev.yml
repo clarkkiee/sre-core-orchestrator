@@ -4,7 +4,7 @@ services:
       target: development
     ports:
       - "8000:8000"
-      - "5678:5678"  # Debug port
+      - "5678:5678"
     volumes:
       - ./app:/app/app:cached
       - ./pipeline:/app/pipeline:cached
@@ -23,7 +23,7 @@ services:
   rabbitmq:
     ports:
       - "5672:5672"
-      - "15672:15672"  # Management UI
+      - "15672:15672"
 
   celery_worker:
     build:

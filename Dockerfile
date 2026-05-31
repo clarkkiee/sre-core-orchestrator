@@ -50,9 +50,6 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/s
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && \
     rm kubectl
 
-RUN curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64" && \
-    chmod +x /usr/local/bin/kind
-
 # Deployment tools: helm, skaffold, kustomize, linkerd
 RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
@@ -109,9 +106,6 @@ RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && \
     rm kubectl
-
-RUN curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64" && \
-    chmod +x /usr/local/bin/kind
 
 # Deployment tools: helm, skaffold, kustomize, linkerd
 RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash

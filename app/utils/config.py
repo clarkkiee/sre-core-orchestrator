@@ -40,16 +40,11 @@ class Settings(BaseSettings):
 
     # Docker / Kind cluster provisioning
     DOCKER_HOST: str | None = None  # For K8s DinD sidecar: "tcp://localhost:2375"
-    KIND_BINARY: str = "/usr/local/bin/kind"
     KUBECTL_BINARY: str = "/usr/local/bin/kubectl"
     KUBECONFIG_DIR: str = "/tmp/kubeconfigs"  # noqa: S108
-    KIND_PORT_RANGE_START: int = 30000
-    KIND_PORT_RANGE_END: int = 32767
-    KIND_PORTS_PER_BLOCK: int = 20
     CLUSTER_DEFAULT_TTL_DAYS: int = 7
     PRIVATE_REGISTRY_URL: str | None = None
-    CLUSTER_PROVIDER: str = "multipass_k3s"  # "kind" | "multipass_k3s"
-
+    CLUSTER_PROVIDER: str = "multipass_k3s"
     # Multipass + k3s settings (used when CLUSTER_PROVIDER=multipass_k3s)
     MULTIPASS_BINARY: str = "/snap/bin/multipass"
     K3S_DISABLE_TRAEFIK: bool = True
