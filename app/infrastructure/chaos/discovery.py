@@ -1,22 +1,14 @@
-"""Kubernetes service discovery for chaos experiment targeting.
-
-Discovers application Deployments and Services in a namespace and resolves the
-correct (non-sidecar) container name, service port, and likely protocol for
-each target so chaos experiments can automatically pick the right probe style.
-"""
-
 from __future__ import annotations
 
 import logging
-import tempfile
 from typing import Any
 
-from kubernetes_asyncio import client, config
-from kubernetes_asyncio.client import ApiClient, Configuration
+from kubernetes_asyncio import client
+from app.infrastructure.kubernetes.client import k8s_client
 
 logger = logging.getLogger(__name__)
 
-# Container names injected by service-mesh sidecars — never chaos-targeted.
+# Container names injected by service mesh sidecars, never chaos-targeted.
 _SIDECAR_CONTAINERS: set[str] = {
     "linkerd-proxy",
     "linkerd-init",
@@ -34,20 +26,6 @@ _INFRA_PREFIXES: tuple[str, ...] = (
     "kube-state",
     "blackbox",
 )
-
-
-async def _build_api_client(kubeconfig_content: str) -> ApiClient:
-    """Build a kubernetes_asyncio ApiClient from raw kubeconfig text."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=True) as tmp:
-        tmp.write(kubeconfig_content)
-        tmp.flush()
-        await config.load_kube_config(config_file=tmp.name)
-
-    configuration = Configuration.get_default_copy()
-    configuration.verify_ssl = False
-    configuration.ssl_ca_cert = None
-    return ApiClient(configuration=configuration)
-
 
 def _extract_app_label(match_labels: dict[str, str] | None) -> str | None:
     """Return the first usable app label selector from Deployment matchLabels."""
@@ -131,8 +109,7 @@ async def discover_services(
         ``port``      - Target Service port (e.g. ``80``)
         ``protocol``  - Likely app protocol (``http``, ``grpc`` or ``tcp``)
     """
-    api_client = await _build_api_client(kubeconfig_content)
-    try:
+    async with k8s_client(kubeconfig_content) as api_client:
         apps_v1 = client.AppsV1Api(api_client)
         core_v1 = client.CoreV1Api(api_client)
         dep_list = await apps_v1.list_namespaced_deployment(namespace)
@@ -202,8 +179,6 @@ async def discover_services(
             "Discovered %d application service(s) in ns=%s", len(services), namespace
         )
         return services
-    finally:
-        await api_client.close()
 
 
 async def resolve_service_target(
@@ -212,8 +187,7 @@ async def resolve_service_target(
     label_selector: str,
 ) -> dict[str, Any] | None:
     """Resolve the Service port/protocol for a deployment label selector."""
-    api_client = await _build_api_client(kubeconfig_content)
-    try:
+    async with k8s_client(kubeconfig_content) as api_client:
         apps_v1 = client.AppsV1Api(api_client)
         core_v1 = client.CoreV1Api(api_client)
         dep_list = await apps_v1.list_namespaced_deployment(namespace)
@@ -237,22 +211,13 @@ async def resolve_service_target(
                     }
 
         return None
-    finally:
-        await api_client.close()
-
 
 async def resolve_target_container(
     kubeconfig_content: str,
     namespace: str,
     label_selector: str,
 ) -> str | None:
-    """Resolve the application container name for pods matching *label_selector*.
-
-    Returns the first non-sidecar container name, or ``None`` if no pods or
-    no suitable container is found.
-    """
-    api_client = await _build_api_client(kubeconfig_content)
-    try:
+    async with k8s_client(kubeconfig_content) as api_client:
         v1 = client.CoreV1Api(api_client)
         pods = await v1.list_namespaced_pod(
             namespace, label_selector=label_selector
@@ -262,5 +227,3 @@ async def resolve_target_container(
 
         pod = pods.items[0]
         return _find_app_container(pod.spec.containers or [])
-    finally:
-        await api_client.close()

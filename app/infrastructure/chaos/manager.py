@@ -6,8 +6,9 @@ from typing import Any, cast
 
 import aiohttp
 import yaml
-from kubernetes_asyncio import client, config
-from kubernetes_asyncio.client import ApiClient, ApiException, Configuration
+from kubernetes_asyncio import client
+from kubernetes_asyncio.client import ApiException
+from app.infrastructure.kubernetes.client import k8s_client
 
 from app.infrastructure.chaos.exceptions import (
     LitmusChaosExperimentError,
@@ -103,18 +104,6 @@ class LitmusChaosManager:
         env["KUBECONFIG"] = kubeconfig_path
         return env
 
-    @staticmethod
-    async def _build_api_client(kubeconfig_content: str) -> ApiClient:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=True) as tmp:
-            tmp.write(kubeconfig_content)
-            tmp.flush()
-            await config.load_kube_config(config_file=tmp.name)
-
-        configuration = Configuration.get_default_copy()
-        configuration.verify_ssl = False
-        configuration.ssl_ca_cert = None
-        return ApiClient(configuration=configuration)
-
     async def deploy(self, kubeconfig_content: str) -> None:
         tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
             mode="w", suffix=".yaml", delete=False
@@ -193,31 +182,27 @@ class LitmusChaosManager:
             os.unlink(tmp.name)  # noqa: PTH108 - Path.unlink() triggers ASYNC240
 
     async def verify_operator(self, kubeconfig_content: str) -> bool:
-        api_client = await self._build_api_client(kubeconfig_content)
+        async with k8s_client(kubeconfig_content) as api_client:
+            try:
+                apps_v1 = client.AppsV1Api(api_client)
+                dep = await asyncio.wait_for(
+                    apps_v1.read_namespaced_deployment(
+                        name="chaos-operator-ce", namespace=_LITMUS_NS
+                    ),
+                    timeout=15.0
+                )
 
-        try:
-            apps_v1 = client.AppsV1Api(api_client)
-            dep = await asyncio.wait_for(
-                apps_v1.read_namespaced_deployment(
-                    name="chaos-operator-ce", namespace=_LITMUS_NS
-                ),
-                timeout=15.0
-            )
+                available = dep.status.available_replicas or 0
 
-            available = dep.status.available_replicas or 0
-
-        except (ApiException, aiohttp.ClientError, asyncio.TimeoutError):
-            return False
-        else:
-            return bool(available)
-        finally:
-            await api_client.close()
+            except (ApiException, aiohttp.ClientError, asyncio.TimeoutError):
+                return False
+            else:
+                return bool(available)
 
     async def setup_experiment_rbac(  # noqa: PLR0912
         self, kubeconfig_content: str, namespace: str
     ) -> None:
-        api_client = await self._build_api_client(kubeconfig_content)
-        try:
+        async with k8s_client(kubeconfig_content) as api_client:
             v1 = client.CoreV1Api(api_client)
             rbac_v1 = client.RbacAuthorizationV1Api(api_client)
             custom = client.CustomObjectsApi(api_client)
@@ -307,8 +292,6 @@ class LitmusChaosManager:
                         raise
 
             logger.info("Litmus RBAC + experiment templates ready in ns=%s", namespace)
-        finally:
-            await api_client.close()
 
     async def create_experiment(  # noqa: PLR0913
         self,
@@ -333,10 +316,8 @@ class LitmusChaosManager:
             probes=probes,
         )[0]
 
-        api_client = await self._build_api_client(kubeconfig_content)
-        try:
+        async with k8s_client(kubeconfig_content) as api_client:
             custom = client.CustomObjectsApi(api_client)
-
             result: dict[str, Any] = await custom.create_namespaced_custom_object(
                 namespace=namespace,
                 body=body,
@@ -351,8 +332,6 @@ class LitmusChaosManager:
                 len(probes) if probes else 0,
             )
             return result
-        finally:
-            await api_client.close()
 
     async def poll_experiment_result(
         self,
@@ -363,11 +342,9 @@ class LitmusChaosManager:
         timeout: int,  # noqa: ASYNC109
     ) -> dict[str, Any]:
         result_name = f"{engine_name}-{experiment_type}"
-        api_client = await self._build_api_client(kubeconfig_content)
-
-        try:
+        
+        async with k8s_client(kubeconfig_content) as api_client:
             custom = client.CustomObjectsApi(api_client)
-
             elapsed = 0
             while elapsed < timeout:
                 try:
@@ -398,9 +375,7 @@ class LitmusChaosManager:
 
             msg = f"Experiment {result_name} did not complete within {timeout}s"
             raise LitmusChaosExperimentError(msg)
-
-        finally:
-            await api_client.close()
+            
 
     async def delete_experiment(
         self,
@@ -408,25 +383,24 @@ class LitmusChaosManager:
         namespace: str,
         engine_name: str,
     ) -> None:
-        api_client = await self._build_api_client(kubeconfig_content)
-        try:
-            custom = client.CustomObjectsApi(api_client)
-            await custom.delete_namespaced_custom_object(
-                group=_LITMUS_CRD_GROUP,
-                version=_LITMUS_CRD_VERSION,
-                namespace=namespace,
-                plural="chaosengines",
-                name=engine_name,
-            )
-            logger.info("ChaosEngine %s deleted from ns=%s", engine_name, namespace)
+        
+        async with k8s_client(kubeconfig_content) as api_client:
+            try:
+                custom = client.CustomObjectsApi(api_client)
+                await custom.delete_namespaced_custom_object(
+                    group=_LITMUS_CRD_GROUP,
+                    version=_LITMUS_CRD_VERSION,
+                    namespace=namespace,
+                    plural="chaosengines",
+                    name=engine_name,
+                )
+                logger.info("ChaosEngine %s deleted from ns=%s", engine_name, namespace)
 
-        except ApiException as e:
-            if e.status != _HTTP_NOT_FOUND:
-                raise
-            logger.warning("ChaosEngine %s already gone", engine_name)
+            except ApiException as e:
+                if e.status != _HTTP_NOT_FOUND:
+                    raise
+                logger.warning("ChaosEngine %s already gone", engine_name)
 
-        finally:
-            await api_client.close()
 
     async def ensure_cluster_ready(
         self,
@@ -437,95 +411,91 @@ class LitmusChaosManager:
         interval_s: int,
         require_no_active_engine: bool = True
     ) -> None:
-        # check all nodes is ready, all pods matching target_label in namespace is ready
 
         deadline = asyncio.get_event_loop().time() + timeout_s
         last_reason = "unknown"
 
         while asyncio.get_event_loop().time() < deadline:
-            api_client = await self._build_api_client(kubeconfig_content)
-
-            try:
-                # nodes ready check
-                core_v1 = client.CoreV1Api(api_client)
-                nodes = await asyncio.wait_for(core_v1.list_node(), timeout=10.0)
-                not_ready_nodes = [
-                    n.metadata.name
-                    for n in nodes.items
-                    if not any(
-                        c.type == "Ready" and c.status == "True"
-                        for c in (n.status.conditions or [])
-                    )
-                ]
-
-                if not_ready_nodes:
-                    last_reason = f"nodes not ready: {not_ready_nodes}"
-                    await asyncio.sleep(interval_s)
-                    continue
-
-                # target pods ready check
-                pods = await asyncio.wait_for(
-                    core_v1.list_namespaced_pod(
-                        namespace=namespace,
-                        label_selector=target_label
-                    ),
-                    timeout=10.0
-                )
-                if not pods.items:
-                    last_reason = f"no pods matching label: '{target_label}'"
-                    await asyncio.sleep(interval_s)
-                    continue
-
-                not_ready_pods = [
-                    p.metadata.name
-                    for p in pods.items
-                    if not any(
-                        c.type == "Ready" and c.status == "True"
-                        for c in (p.status.conditions or [])
-                    )
-                ]
-
-                if not_ready_pods:
-                    last_reason = f"pods not ready: {not_ready_pods}"
-                    await asyncio.sleep(interval_s)
-                    continue
-
-
-                # no active chaos engine
-                if require_no_active_engine:
-                    custom = client.CustomObjectsApi(api_client)
-                    engines = await asyncio.wait_for(
-                        custom.list_namespaced_custom_object(
-                            namespace=namespace,
-                            version=_LITMUS_CRD_VERSION,
-                            group=_LITMUS_CRD_GROUP,
-                            plural="chaosengines"
-                        ),
-                        timeout=10.0
-                    )
-
-                    active = [
-                        e["metadata"]["name"]
-                        for e in engines.get("items", [])
-                        if e.get("status", {}).get("engineStatus")
-                        not in (None, "completed", "stopped")
+            async with k8s_client(kubeconfig_content) as api_client:
+                try:
+                    # nodes ready check
+                    core_v1 = client.CoreV1Api(api_client)
+                    nodes = await asyncio.wait_for(core_v1.list_node(), timeout=10.0)
+                    not_ready_nodes = [
+                        n.metadata.name
+                        for n in nodes.items
+                        if not any(
+                            c.type == "Ready" and c.status == "True"
+                            for c in (n.status.conditions or [])
+                        )
                     ]
 
-                    if active:
-                        last_reason = f"Active ChaoEngines: {active}"
+                    if not_ready_nodes:
+                        last_reason = f"nodes not ready: {not_ready_nodes}"
                         await asyncio.sleep(interval_s)
                         continue
 
-                logger.info(
-                    "Cluster ready: namespace=%s target_label=%s",
-                    namespace, target_label
-                )
-                return
+                    # target pods ready check
+                    pods = await asyncio.wait_for(
+                        core_v1.list_namespaced_pod(
+                            namespace=namespace,
+                            label_selector=target_label
+                        ),
+                        timeout=10.0
+                    )
+                    if not pods.items:
+                        last_reason = f"no pods matching label: '{target_label}'"
+                        await asyncio.sleep(interval_s)
+                        continue
 
-            except (ApiException, aiohttp.ClientError, asyncio.TimeoutError) as e:
-                last_reason = f"API error: {e}"
-                await asyncio.sleep(interval_s)
-            finally:
-                await api_client.close()
+                    not_ready_pods = [
+                        p.metadata.name
+                        for p in pods.items
+                        if not any(
+                            c.type == "Ready" and c.status == "True"
+                            for c in (p.status.conditions or [])
+                        )
+                    ]
 
+                    if not_ready_pods:
+                        last_reason = f"pods not ready: {not_ready_pods}"
+                        await asyncio.sleep(interval_s)
+                        continue
+
+
+                    # no active chaos engine
+                    if require_no_active_engine:
+                        custom = client.CustomObjectsApi(api_client)
+                        engines = await asyncio.wait_for(
+                            custom.list_namespaced_custom_object(
+                                namespace=namespace,
+                                version=_LITMUS_CRD_VERSION,
+                                group=_LITMUS_CRD_GROUP,
+                                plural="chaosengines"
+                            ),
+                            timeout=10.0
+                        )
+
+                        active = [
+                            e["metadata"]["name"]
+                            for e in engines.get("items", [])
+                            if e.get("status", {}).get("engineStatus")
+                            not in (None, "completed", "stopped")
+                        ]
+
+                        if active:
+                            last_reason = f"Active ChaoEngines: {active}"
+                            await asyncio.sleep(interval_s)
+                            continue
+
+                    logger.info(
+                        "Cluster ready: namespace=%s target_label=%s",
+                        namespace, target_label
+                    )
+                    return
+
+                except (ApiException, aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    last_reason = f"API error: {e}"
+                    await asyncio.sleep(interval_s)
+                    
         raise ClusterNotReadyError(last_reason, timeout_s)

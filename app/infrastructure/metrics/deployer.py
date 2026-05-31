@@ -2,13 +2,13 @@
 
 import asyncio
 import logging
-import tempfile
 from typing import Any
 
 import httpx
-from kubernetes_asyncio import client, config
-from kubernetes_asyncio.client import ApiClient, Configuration
+from kubernetes_asyncio import client
+from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
+from app.infrastructure.kubernetes.client import k8s_client
 
 from app.infrastructure.config_values import get_renderer
 
@@ -44,8 +44,7 @@ class MonitoringStackDeployer:
         kubeconfig_content: str,
         control_plane_ip: str,
     ) -> str:
-        api_client = await self._build_api_client(kubeconfig_content)
-        try:
+        async with k8s_client(kubeconfig_content) as api_client:
             await self._apply_namespace(api_client)
             await self._apply_kube_state_metrics(api_client)
             await self._apply_blackbox_exporter(api_client)
@@ -64,9 +63,7 @@ class MonitoringStackDeployer:
                 api_client,
                 label_selector="app=victoria-metrics",
             )
-        finally:
-            await api_client.close()
-
+                
         host = control_plane_ip
         vm_url = f"http://{host}:{self._vm_nodeport}"
         await self._health_check(vm_url)
@@ -254,8 +251,6 @@ class MonitoringStackDeployer:
             c.type == "Ready" and c.status == "True" for c in pod.status.conditions
         )
 
-    # -- health check ----------------------------------------------------------
-
     async def _health_check(self, vm_url: str) -> None:
         """Verify VictoriaMetrics is responding."""
         url = f"{vm_url}/health"
@@ -286,25 +281,3 @@ class MonitoringStackDeployer:
             f"VictoriaMetrics at {vm_url} not healthy after {_HEALTH_RETRIES} attempts"
         )
         raise MonitoringDeployError(msg)
-
-    # -- kubernetes client setup -----------------------------------------------
-
-    @staticmethod
-    async def _build_api_client(
-        kubeconfig_content: str,
-    ) -> ApiClient:
-        """Build a kubernetes-asyncio ApiClient from kubeconfig."""
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".yaml",
-            delete=True,
-        ) as tmp:
-            tmp.write(kubeconfig_content)
-            tmp.flush()
-            await config.load_kube_config(config_file=tmp.name)
-
-        configuration = Configuration.get_default_copy()
-        configuration.verify_ssl = False
-        configuration.ssl_ca_cert = None
-
-        return ApiClient(configuration=configuration)
