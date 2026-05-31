@@ -18,17 +18,19 @@ from app.infrastructure.chaos.exceptions import (
     ClusterNotReadyError,
 )
 
+from app.infrastructure.constants import (
+    LITMUS_CRD_GROUP,
+    LITMUS_NAMESPACE,
+    LITMUS_CRD_VERSION
+)
+
 from app.infrastructure.chaos import experiments
 from app.infrastructure.config_values import get_renderer
+from http import HTTPStatus
 
 logger = logging.getLogger(__name__)
 
-_LITMUS_NS = "litmus"
-_LITMUS_CRD_GROUP = "litmuschaos.io"
-_LITMUS_CRD_VERSION = "v1alpha1"
 _POLL_INTERVAL = 5
-_HTTP_NOT_FOUND = 404
-
 
 class LitmusChaosManager:
     def __init__(
@@ -121,7 +123,7 @@ class LitmusChaosManager:
                     "deployment",
                     "chaos-operator-ce",
                     "-n",
-                    _LITMUS_NS,
+                    LITMUS_NAMESPACE,
                     kubeconfig_path=kc,
                 )
             except LitmusCommandError:
@@ -143,7 +145,7 @@ class LitmusChaosManager:
             # Deploy chaos-exporter
             cex_manifests = get_renderer().render_to_dicts(
                 "litmus/chaos-exporter.yaml.j2",
-                namespace=_LITMUS_NS,
+                namespace=LITMUS_NAMESPACE,
             )
             for manifest in cex_manifests:
                 await self._run_kubectl_apply_stdin(
@@ -161,7 +163,7 @@ class LitmusChaosManager:
                         "deployment",
                         "chaos-operator-ce",
                         "-n",
-                        _LITMUS_NS,
+                        LITMUS_NAMESPACE,
                         "-o",
                         "jsonpath={.status.availableReplicas}",
                         kubeconfig_path=kc,
@@ -187,7 +189,7 @@ class LitmusChaosManager:
                 apps_v1 = client.AppsV1Api(api_client)
                 dep = await asyncio.wait_for(
                     apps_v1.read_namespaced_deployment(
-                        name="chaos-operator-ce", namespace=_LITMUS_NS
+                        name="chaos-operator-ce", namespace=LITMUS_NAMESPACE
                     ),
                     timeout=15.0
                 )
@@ -255,8 +257,8 @@ class LitmusChaosManager:
             result: dict[str, Any] = await custom.create_namespaced_custom_object(
                 namespace=namespace,
                 body=body,
-                group=_LITMUS_CRD_GROUP,
-                version=_LITMUS_CRD_VERSION,
+                group=LITMUS_CRD_GROUP,
+                version=LITMUS_CRD_VERSION,
                 plural="chaosengines",
             )
             logger.info(
@@ -284,8 +286,8 @@ class LitmusChaosManager:
                 try:
                     result: dict[str, Any] = await custom.get_namespaced_custom_object(
                         namespace=namespace,
-                        group=_LITMUS_CRD_GROUP,
-                        version=_LITMUS_CRD_VERSION,
+                        group=LITMUS_CRD_GROUP,
+                        version=LITMUS_CRD_VERSION,
                         plural="chaosresults",
                         name=result_name,
                     )
@@ -301,7 +303,7 @@ class LitmusChaosManager:
                         return result
 
                 except ApiException as e:
-                    if e.status != _HTTP_NOT_FOUND:
+                    if e.status != HTTPStatus.NOT_FOUND:
                         raise
 
                 await asyncio.sleep(_POLL_INTERVAL)
@@ -322,8 +324,8 @@ class LitmusChaosManager:
             try:
                 custom = client.CustomObjectsApi(api_client)
                 await custom.delete_namespaced_custom_object(
-                    group=_LITMUS_CRD_GROUP,
-                    version=_LITMUS_CRD_VERSION,
+                    group=LITMUS_CRD_GROUP,
+                    version=LITMUS_CRD_VERSION,
                     namespace=namespace,
                     plural="chaosengines",
                     name=engine_name,
@@ -331,7 +333,7 @@ class LitmusChaosManager:
                 logger.info("ChaosEngine %s deleted from ns=%s", engine_name, namespace)
 
             except ApiException as e:
-                if e.status != _HTTP_NOT_FOUND:
+                if e.status != HTTPStatus.NOT_FOUND:
                     raise
                 logger.warning("ChaosEngine %s already gone", engine_name)
 
@@ -403,8 +405,8 @@ class LitmusChaosManager:
                         engines = await asyncio.wait_for(
                             custom.list_namespaced_custom_object(
                                 namespace=namespace,
-                                version=_LITMUS_CRD_VERSION,
-                                group=_LITMUS_CRD_GROUP,
+                                version=LITMUS_CRD_VERSION,
+                                group=LITMUS_CRD_GROUP,
                                 plural="chaosengines"
                             ),
                             timeout=10.0

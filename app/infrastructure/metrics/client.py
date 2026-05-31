@@ -3,9 +3,9 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from http import HTTPStatus
 
 _DEFAULT_TIMEOUT = 30.0
-_HTTP_OK = 200
 _SCALAR_RESULT_LENGTH = 2
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ class VictoriaMetricsClient:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.get(f"{self._base_url}/health")
-                if resp.status_code == _HTTP_OK:
+                if resp.status_code == HTTPStatus.OK:
                     return True, "VictoriaMetrics is healthy"
                 return False, f"Unexpected err with status code: {resp.status_code}"
         except httpx.ConnectError:
@@ -98,7 +98,7 @@ class VictoriaMetricsClient:
 
         body = resp.json()
 
-        if resp.status_code != _HTTP_OK or body.get("status") != "success":
+        if resp.status_code != HTTPStatus.OK or body.get("status") != "success":
             error_msg = body.get("error", body.get("errorType", "unknown error"))
             logger.warning("PromQL query failed: %s -- %s", promql, error_msg)
             raise MetricsQueryError(query=promql, reason=error_msg)

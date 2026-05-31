@@ -30,19 +30,10 @@ from app.tasks.chaos_tasks import _POST_CHAOS_OVERHEAD, _PRE_CHAOS_OVERHEAD
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
 from app.infrastructure.chaos import experiments
-from app.infrastructure.config_values import load_values
+from app.infrastructure.factories import build_litmus_manager
+from app.infrastructure.chaos.naming import LITMUS_NAME_TO_TYPE
 
 logger = logging.getLogger(__name__)
-
-# Maps litmus experiment name → model enum value.
-_LITMUS_TO_TYPE: dict[str, ExperimentType] = {
-    "pod-delete": ExperimentType.POD_DELETE,
-    "pod-cpu-hog": ExperimentType.POD_CPU_HOG,
-    "pod-memory-hog": ExperimentType.POD_MEMORY_HOG,
-    "pod-network-latency": ExperimentType.POD_NETWORK_LATENCY,
-    "pod-network-loss": ExperimentType.POD_NETWORK_LOSS,
-}
-
 
 # ---------------------------------------------------------------------------
 # Celery task entry point
@@ -333,13 +324,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
 ) -> dict[str, str]:
     """Execute all campaign phases in order."""
     
-    values = load_values()
-    
-    litmus_manager = LitmusChaosManager(
-        kubectl_binary=settings.KUBECTL_BINARY,
-        litmus_version=values["litmus"]["version"],
-        litmus_runner_image=values["litmus"]["runner_image"],
-    )
+    litmus_manager = build_litmus_manager()
 
     # ------------------------------------------------------------------
     # Phase 1: VALIDATING (2%)
@@ -403,7 +388,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     failed_count = 0
 
     for litmus_name in experiment_types:
-        experiment_type_enum = _LITMUS_TO_TYPE[litmus_name]
+        experiment_type_enum = LITMUS_NAME_TO_TYPE[litmus_name]
 
         for service in services:
             # Check if campaign was stopped between experiments.

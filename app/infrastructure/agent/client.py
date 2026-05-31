@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from http import HTTPStatus
 
 import httpx
 
@@ -48,7 +49,7 @@ class AgentClient:
         try:
             client = await self._client()
             resp = await client.get("/health", timeout=3.0)
-            return resp.status_code == 200  # noqa: PLR2004
+            return resp.status_code == HTTPStatus.OK
         except httpx.HTTPError:
             return False
 
@@ -73,7 +74,6 @@ class AgentClient:
         vm_image: str = "22.04",
         disable_traefik: bool = True,
     ) -> None:
-        """POST /tasks/provision. Raises on non-202."""
         client = await self._client()
         resp = await client.post(
             "/tasks/provision",
@@ -88,7 +88,7 @@ class AgentClient:
                 "disable_traefik": disable_traefik,
             },
         )
-        if resp.status_code != 202:  # noqa: PLR2004
+        if resp.status_code != HTTPStatus.ACCEPTED:
             body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             msg = body.get("error", resp.text)
             raise AgentUnreachableError(
@@ -103,7 +103,6 @@ class AgentClient:
         cluster_name: str,
         worker_count: int = 2,
     ) -> None:
-        """POST /tasks/teardown. Raises on non-202."""
         client = await self._client()
         resp = await client.post(
             "/tasks/teardown",
@@ -113,7 +112,7 @@ class AgentClient:
                 "worker_count": worker_count,
             },
         )
-        if resp.status_code != 202:  # noqa: PLR2004
+        if resp.status_code != HTTPStatus.ACCEPTED:
             body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             msg = body.get("error", resp.text)
             raise AgentUnreachableError(
@@ -137,10 +136,9 @@ class AgentClient:
     # ---- VMs ----
 
     async def get_vm(self, vm_name: str) -> dict[str, Any] | None:
-        """GET /vms/{name}. Returns VM info dict, or None if 404."""
         client = await self._client()
         resp = await client.get(f"/vms/{vm_name}")
-        if resp.status_code == 404:  # noqa: PLR2004
+        if resp.status_code == HTTPStatus.NOT_FOUND:
             return None
         resp.raise_for_status()
         return resp.json()

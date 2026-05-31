@@ -4,7 +4,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from app.infrastructure.chaos.manager import LitmusChaosManager
 from app.infrastructure.chaos.probes import build_probes, estimate_eot_probe_overhead_seconds
 from app.infrastructure.chaos.discovery import (
     resolve_service_target,
@@ -20,17 +19,10 @@ from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
-from app.infrastructure.config_values import load_values
+from app.infrastructure.factories import build_litmus_manager
+from app.infrastructure.chaos.naming import TYPE_TO_LITMUS_NAME
 
 logger = logging.getLogger(__name__)
-
-_TYPE_TO_LITMUS_NAME: dict[ExperimentType, str] = {
-    ExperimentType.POD_DELETE: "pod-delete",
-    ExperimentType.POD_CPU_HOG: "pod-cpu-hog",
-    ExperimentType.POD_MEMORY_HOG: "pod-memory-hog",
-    ExperimentType.POD_NETWORK_LATENCY: "pod-network-latency",
-    ExperimentType.POD_NETWORK_LOSS: "pod-network-loss",
-}
 
 _INJECTED_TIME_POLL_TIMEOUT = 60.0
 _INJECTED_TIME_POLL_INTERVAL = 5.0
@@ -106,16 +98,10 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
 ) -> dict[str, str]:
     """Execute Chaos Experiment phases in order"""
     
-    values = load_values()
-    
-    litmus_manager = LitmusChaosManager(
-        kubectl_binary=settings.KUBECTL_BINARY,
-        litmus_version=values["litmus"]["version"],
-        litmus_runner_image=values["litmus"]["runner_image"],
-    )
+    litmus_manager = build_litmus_manager()
 
     kubeconfig = cluster.kubeconfig
-    litmus_name = _TYPE_TO_LITMUS_NAME[experiment.experiment_type]
+    litmus_name = TYPE_TO_LITMUS_NAME[experiment.experiment_type]
     engine_name = experiment.chaos_engine_name
 
     if not kubeconfig:

@@ -4,9 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from app.infrastructure.chaos.manager import LitmusChaosManager
 from app.infrastructure.kubernetes import KubernetesVerifier
-from app.infrastructure.metrics.deployer import MonitoringStackDeployer
 from app.infrastructure.providers import get_provider
 from app.infrastructure.servicemesh.manager import LinkerdManager
 from app.models.cluster import ClusterStatus
@@ -18,7 +16,7 @@ from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
 from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
-from app.infrastructure.config_values import load_values
+from app.infrastructure.factories import build_litmus_manager, build_monitoring_deployer
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +136,9 @@ async def _run_provisioning_phases(
 
     # Phase: DEPLOYING_MONITORING (70%)
     await on_progress("DEPLOYING_MONITORING", 70)
-    values = load_values()
-    monitoring_deployer = MonitoringStackDeployer(
-        vm_image=values["monitoring"]["vm_image"],
-        ksm_image=values["monitoring"]["ksm_image"],
-        vm_nodeport=values["monitoring"]["vm_nodeport"],
-        bbe_image=values["monitoring"]["bbe_image"],
-    )
+    
+    
+    monitoring_deployer = build_monitoring_deployer()
     vm_url = await monitoring_deployer.deploy(
         result.kubeconfig_content,
         result.control_plane_ip,
@@ -163,11 +157,7 @@ async def _run_provisioning_phases(
 
     # Phase: DEPLOYING_LITMUS (85%)
     await on_progress("DEPLOYING_LITMUS", 85)
-    litmus_manager = LitmusChaosManager(
-        kubectl_binary=settings.KUBECTL_BINARY,
-        litmus_version=values["litmus"]["version"],
-        litmus_runner_image=values["litmus"]["runner_image"],
-    )
+    litmus_manager = build_litmus_manager()
     await litmus_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 
     # Phase: COMPLETE (100%)

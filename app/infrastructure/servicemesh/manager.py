@@ -10,6 +10,7 @@ from app.infrastructure.servicemesh.exceptions import (
     LinkerdDeployError,
 )
 from app.utils.config import settings
+from http import HTTPStatus
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,6 @@ _GATEWAY_API_BASE_URL = (
 )
 _CHECK_RETRIES = 3
 _CHECK_RETRY_DELAY = 10
-_HTTP_OK = 200
 _GATEWAY_INSTALL_RETRIES = 3
 _GATEWAY_RETRY_DELAY = 2
 _VIZ_WAIT_TIMEOUT = "120s"
@@ -157,7 +157,7 @@ class LinkerdManager:
             try:
                 async with httpx.AsyncClient(timeout=10, follow_redirects=True) as http:
                     resp = await http.get(gateway_url)
-                if resp.status_code == _HTTP_OK:
+                if resp.status_code == HTTPStatus.OK:
                     await self._run_kubectl_apply_stdin(
                         kubeconfig_path=kc, manifest_yaml=resp.text
                     )

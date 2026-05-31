@@ -2,8 +2,7 @@ from typing import Any
 from kubernetes_asyncio import client
 from kubernetes_asyncio.client import ApiClient
 from kubernetes_asyncio.client.exceptions import ApiException
-
-_HTTP_CONFLICT = 409
+from http import HTTPStatus
 
 async def apply_manifest(api: ApiClient, manifest: dict[str, Any]) -> None:
     
@@ -33,7 +32,7 @@ async def apply_manifest(api: ApiClient, manifest: dict[str, Any]) -> None:
     try:
         await creators[kind]()
     except ApiException as exc:
-        if exc.status != _HTTP_CONFLICT:
+        if exc.status != HTTPStatus.CONFLICT:
             raise
         await _replace(api, manifest, kind, name, namespace)
         
@@ -73,7 +72,7 @@ async def apply_custom_object(api: ApiClient, manifest: dict[str, Any], *, plura
             body=manifest
         )
     except ApiException as exc:
-        if exc.status != _HTTP_CONFLICT:
+        if exc.status != HTTPStatus.CONFLICT:
             raise
         existing = await custom.get_namespaced_custom_object(
             group=group, version=version, name=name,

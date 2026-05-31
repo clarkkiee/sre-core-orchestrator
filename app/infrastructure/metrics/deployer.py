@@ -5,24 +5,21 @@ import logging
 from typing import Any
 
 import httpx
+from http import HTTPStatus
 from kubernetes_asyncio import client
 from kubernetes_asyncio.client import ApiClient
 from app.infrastructure.kubernetes.client import k8s_client
 from app.infrastructure.kubernetes.apply import apply_manifest
 
 from app.infrastructure.config_values import get_renderer
+from app.infrastructure.constants import MONITORING_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
-_MONITORING_NS = "monitoring"
 _POLL_INTERVAL = 5
 _DEFAULT_TIMEOUT = 120
 _HEALTH_RETRIES = 12
 _HEALTH_DELAY = 5
-_HTTP_OK = 200
-_HTTP_CONFLICT = 409
-_HTTP_NOT_FOUND = 404
-
 
 class MonitoringDeployError(Exception):
     """Raised when the monitoring stack fails to deploy."""
@@ -116,7 +113,7 @@ class MonitoringStackDeployer:
 
         while elapsed < timeout_seconds:
             pod_list = await v1.list_namespaced_pod(
-                namespace=_MONITORING_NS,
+                namespace=MONITORING_NAMESPACE,
                 label_selector=label_selector,
             )
 
@@ -149,7 +146,7 @@ class MonitoringStackDeployer:
             try:
                 async with httpx.AsyncClient(timeout=10) as http:
                     resp = await http.get(url)
-                if resp.status_code == _HTTP_OK:
+                if resp.status_code == HTTPStatus.OK:
                     logger.info("VictoriaMetrics health check passed")
                     return
                 logger.warning(
