@@ -7,8 +7,8 @@ from typing import Any
 import httpx
 from kubernetes_asyncio import client
 from kubernetes_asyncio.client import ApiClient
-from kubernetes_asyncio.client.exceptions import ApiException
 from app.infrastructure.kubernetes.client import k8s_client
+from app.infrastructure.kubernetes.apply import apply_manifest
 
 from app.infrastructure.config_values import get_renderer
 
@@ -73,15 +73,7 @@ class MonitoringStackDeployer:
 
     async def _apply_namespace(self, api_client: ApiClient) -> None:
         ns = get_renderer().render_to_dicts("monitoring/namespace.yaml")[0]
-        v1 = client.CoreV1Api(api_client)
-        try:
-            await v1.create_namespace(body=ns) # type: ignore[unused-ignore]
-            logger.info("Created namespace %s", _MONITORING_NS)
-        except ApiException as exc:
-            if exc.status == _HTTP_CONFLICT:
-                logger.info("Namespace %s already exists", _MONITORING_NS)
-            else:
-                raise
+        await apply_manifest(api_client, ns)
     
     async def _apply_blackbox_exporter(self, api_client: ApiClient) -> None:
         manifests = get_renderer().render_to_dicts(
@@ -89,7 +81,7 @@ class MonitoringStackDeployer:
         )
         
         for m in manifests:
-            await self._apply_manifest(api_client, m)
+            await apply_manifest(api_client, m)
         logger.info("prometheus-blackbox-exporter manifests applied")
         
     async def _apply_kube_state_metrics(self, api_client: ApiClient) -> None:
@@ -98,7 +90,7 @@ class MonitoringStackDeployer:
         )
         
         for m in manifests:
-            await self._apply_manifest(api_client, m)
+            await apply_manifest(api_client, m)
         logger.info("kube-state-metrics manifests applied")
         
     async def _apply_victoriametrics(self, api_client: ApiClient) -> None:
@@ -109,111 +101,9 @@ class MonitoringStackDeployer:
         )
         
         for m in manifests:
-            await self._apply_manifest(api_client, m)
+            await apply_manifest(api_client, m)
         logger.info("victoriametrics manifests applied")
         
-    async def _apply_manifest(
-        self,
-        api_client: ApiClient,
-        manifest: dict[str, Any],
-    ) -> None:
-        """Create or update a single Kubernetes resource."""
-        kind = manifest["kind"]
-        name = manifest["metadata"]["name"]
-        namespace = manifest["metadata"].get("namespace")
-
-        v1 = client.CoreV1Api(api_client)
-        apps_v1 = client.AppsV1Api(api_client)
-        rbac_v1 = client.RbacAuthorizationV1Api(api_client)
-
-        try:
-            if kind == "ServiceAccount":
-                await v1.create_namespaced_service_account(
-                    namespace=namespace,
-                    body=manifest,  # type: ignore[unused-ignore]
-                )
-            elif kind == "ClusterRole":
-                await rbac_v1.create_cluster_role(body=manifest)  # type: ignore[unused-ignore]
-            elif kind == "ClusterRoleBinding":
-                await rbac_v1.create_cluster_role_binding(body=manifest)  # type: ignore[unused-ignore]
-            elif kind == "ConfigMap":
-                await v1.create_namespaced_config_map(
-                    namespace=namespace,
-                    body=manifest,  # type: ignore[unused-ignore]
-                )
-            elif kind == "Deployment":
-                await apps_v1.create_namespaced_deployment(
-                    namespace=namespace,
-                    body=manifest,  # type: ignore[unused-ignore]
-                )
-            elif kind == "Service":
-                await v1.create_namespaced_service(
-                    namespace=namespace,
-                    body=manifest,  # type: ignore[unused-ignore]
-                )
-            else:
-                msg = f"Unsupported manifest kind: {kind}"
-                raise MonitoringDeployError(msg)
-
-            logger.info("Created %s/%s", kind, name)
-
-        except ApiException as exc:
-            if exc.status != _HTTP_CONFLICT:
-                raise
-            logger.info("%s/%s already exists, updating", kind, name)
-            await self._update_manifest(api_client, manifest, kind, name, namespace)
-
-    async def _update_manifest(
-        self,
-        api_client: ApiClient,
-        manifest: dict[str, Any],
-        kind: str,
-        name: str,
-        namespace: str | None,
-    ) -> None:
-        """Replace an existing resource with the new manifest."""
-        v1 = client.CoreV1Api(api_client)
-        apps_v1 = client.AppsV1Api(api_client)
-        rbac_v1 = client.RbacAuthorizationV1Api(api_client)
-
-        ns = namespace or _MONITORING_NS
-
-        if kind == "ClusterRole":
-            await rbac_v1.replace_cluster_role(
-                name=name,
-                body=manifest,  # type: ignore[unused-ignore]
-            )
-        elif kind == "ClusterRoleBinding":
-            await rbac_v1.replace_cluster_role_binding(
-                name=name,
-                body=manifest,  # type: ignore[unused-ignore]
-            )
-        elif kind == "ConfigMap":
-            await v1.replace_namespaced_config_map(
-                name=name,
-                namespace=ns,
-                body=manifest,  # type: ignore[unused-ignore]
-            )
-        elif kind == "Deployment":
-            await apps_v1.replace_namespaced_deployment(
-                name=name,
-                namespace=ns,
-                body=manifest,  # type: ignore[unused-ignore]
-            )
-        elif kind == "Service":
-            # Services need the existing clusterIP and resourceVersion
-            existing = await v1.read_namespaced_service(name=name, namespace=ns)
-            manifest["metadata"]["resourceVersion"] = existing.metadata.resource_version
-            manifest["spec"]["clusterIP"] = existing.spec.cluster_ip
-            await v1.replace_namespaced_service(
-                name=name,
-                namespace=ns,
-                body=manifest,  # type: ignore[unused-ignore]
-            )
-        # ServiceAccount: skip update — no meaningful fields to change
-
-    # -- readiness polling -----------------------------------------------------
-
     async def _wait_for_ready(
         self,
         api_client: ApiClient,

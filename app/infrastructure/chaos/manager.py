@@ -9,6 +9,7 @@ import yaml
 from kubernetes_asyncio import client
 from kubernetes_asyncio.client import ApiException
 from app.infrastructure.kubernetes.client import k8s_client
+from app.infrastructure.kubernetes.apply import apply_custom_object, apply_manifest
 
 from app.infrastructure.chaos.exceptions import (
     LitmusChaosExperimentError,
@@ -26,7 +27,6 @@ _LITMUS_NS = "litmus"
 _LITMUS_CRD_GROUP = "litmuschaos.io"
 _LITMUS_CRD_VERSION = "v1alpha1"
 _POLL_INTERVAL = 5
-_HTTP_CONFLICT = 409
 _HTTP_NOT_FOUND = 404
 
 
@@ -199,56 +199,18 @@ class LitmusChaosManager:
             else:
                 return bool(available)
 
-    async def setup_experiment_rbac(  # noqa: PLR0912
+    async def setup_experiment_rbac(
         self, kubeconfig_content: str, namespace: str
     ) -> None:
+        renderer = get_renderer()
         async with k8s_client(kubeconfig_content) as api_client:
-            v1 = client.CoreV1Api(api_client)
-            rbac_v1 = client.RbacAuthorizationV1Api(api_client)
-            custom = client.CustomObjectsApi(api_client)
-            rbac_manifests = get_renderer().render_to_dicts(
-                "litmus/rbac.yaml.j2",
-                namespace=namespace
-            )
+            # Litmus RBAC
+            for manifest in renderer.render_to_dicts(
+                "litmus/rbac.yaml.j2", namespace=namespace
+            ):
+                await apply_manifest(api_client, manifest)
 
-            # ServiceAccount
-            sa = rbac_manifests[0]
-            try:
-                await v1.create_namespaced_service_account(namespace=namespace, body=sa) # pyright: ignore[reportArgumentType]
-            except ApiException as e:
-                if e.status != _HTTP_CONFLICT:
-                    raise
-            
-            #  Role
-            role = rbac_manifests[1]
-            try:
-                await rbac_v1.create_namespaced_role(namespace=namespace, body=role) # pyright: ignore[reportArgumentType]
-            except ApiException as e:
-                if e.status == _HTTP_CONFLICT:
-                    await rbac_v1.replace_namespaced_role(
-                        name=role["metadata"]["name"], namespace=namespace, body=role # pyright: ignore[reportArgumentType]
-                    )
-                else:
-                    raise
-
-            # RoleBinding
-            role_binding = rbac_manifests[2]
-            try:
-                await rbac_v1.create_namespaced_role_binding(
-                    namespace=namespace, body=role_binding # pyright: ignore[reportArgumentType]
-                )
-            except ApiException as e:
-                if e.status == _HTTP_CONFLICT:
-                    await rbac_v1.replace_namespaced_role_binding(
-                        name=role_binding["metadata"]["name"],
-                        namespace=namespace,
-                        body=role_binding, # pyright: ignore[reportArgumentType]
-                    )
-                else:
-                    raise
-
-            # Apply ChaosExperiment templates (create or patch)
-            renderer = get_renderer()
+            # Litmus Chaos Experiments
             for exp_type in experiments.experiment_names():
                 exp_config = experiments.get_experiment(exp_type)
                 body = renderer.render_to_dicts(
@@ -260,37 +222,9 @@ class LitmusChaosManager:
                     env_vars=experiments.build_experiment_env_vars(exp_type),
                     needs_runtime_socket=experiments.needs_runtime_socket(exp_type)
                 )[0]
-                try:
-                    await custom.create_namespaced_custom_object(
-                        namespace=namespace,
-                        body=body,
-                        group=_LITMUS_CRD_GROUP,
-                        version=_LITMUS_CRD_VERSION,
-                        plural="chaosexperiments",
-                    )
-                except ApiException as e:
-                    if e.status == _HTTP_CONFLICT:
-                        existing = await custom.get_namespaced_custom_object(
-                            group=_LITMUS_CRD_GROUP,
-                            version=_LITMUS_CRD_VERSION,
-                            namespace=namespace,
-                            plural="chaosexperiments",
-                            name=exp_type,
-                        )
-                        body["metadata"]["resourceVersion"] = existing["metadata"][
-                            "resourceVersion"
-                        ]
-                        await custom.replace_namespaced_custom_object(
-                            group=_LITMUS_CRD_GROUP,
-                            version=_LITMUS_CRD_VERSION,
-                            namespace=namespace,
-                            plural="chaosexperiments",
-                            name=exp_type,
-                            body=body,
-                        )
-                    else:
-                        raise
-
+                
+                await apply_custom_object(api_client, body, plural="chaosexperiments")
+                
             logger.info("Litmus RBAC + experiment templates ready in ns=%s", namespace)
 
     async def create_experiment(  # noqa: PLR0913
