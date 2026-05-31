@@ -2,19 +2,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from app.models.job import Job
+from app.repositories.job import JobRepository
 
 from app.utils.config import settings
 
 
 def _make_session_maker() -> async_sessionmaker[AsyncSession]:
-    """Create a disposable async engine + session maker for a single task.
-
-    Each call creates a fresh engine (with a small pool) so that forked
-    Celery workers never share an event-loop-bound engine.  The engine
-    is disposed automatically when the session context exits — see
-    ``_task_session()``.
-    """
-
     task_engine = create_async_engine(
         settings.DATABASE_URL,
         pool_size=2,
@@ -35,14 +29,6 @@ def _make_session_maker() -> async_sessionmaker[AsyncSession]:
 
 @asynccontextmanager
 async def task_session() -> AsyncIterator[AsyncSession]:
-    """Provide a session that automatically disposes its engine on exit.
-
-    Usage::
-
-        async with task_session() as session:
-            repo = SomeRepository(session)
-            ...
-    """
     maker = _make_session_maker()
     engine = maker.kw["bind"]
     async with maker() as session:
@@ -50,3 +36,14 @@ async def task_session() -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await engine.dispose()
+
+class JobProgress:
+    def __init__(self, job_repo: JobRepository, job: Job) -> None:
+        self._repo = job_repo
+        self._job = job
+
+    async def __call__(self, phase: str, pct: int) -> None:
+        await self._repo.update(
+            self._job, current_phase=phase, progress_percentage=pct
+        )
+        await self._repo.db.commit()

@@ -27,7 +27,7 @@ from app.repositories.job import JobRepository
 from app.services.evaluation import EVALUATION_WINDOW_SECONDS
 from app.tasks.celery_config import celery_app
 from app.tasks.chaos_tasks import _POST_CHAOS_OVERHEAD, _PRE_CHAOS_OVERHEAD
-from app.tasks.shared import _make_session_maker
+from app.tasks.shared import JobProgress, _make_session_maker
 from app.utils.config import settings
 from app.infrastructure.chaos import experiments
 from app.infrastructure.factories import build_litmus_manager
@@ -325,6 +325,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     """Execute all campaign phases in order."""
     
     litmus_manager = build_litmus_manager()
+    progress = JobProgress(job_repo, job)
 
     # ------------------------------------------------------------------
     # Phase 1: VALIDATING (2%)
@@ -374,8 +375,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     # ------------------------------------------------------------------
     # Phase 3: PREPARING (10%)
     # ------------------------------------------------------------------
-    await job_repo.update(job, current_phase="PREPARING_RBAC", progress_percentage=10)
-    await session.commit()
+    await progress("PREPARING_RBAC", 10)
 
     await litmus_manager.setup_experiment_rbac(
         kubeconfig_content=kubeconfig, namespace=campaign.target_namespace
@@ -439,12 +439,10 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
                 campaign.id, litmus_name, service["name"], completed + 1, total,
             )
 
-            await job_repo.update(
-                job,
-                current_phase=f"BASELINE_WAIT:{litmus_name}:{service['name']}",
-                progress_percentage=10 + int(80 * completed / total),
+            await progress(
+                f"BASELINE_WAIT:{litmus_name}:{service['name']}",
+                10 + int(80 * completed / total),
             )
-            await session.commit()
 
             verdict = await _run_single_experiment(
                 litmus_manager=litmus_manager,

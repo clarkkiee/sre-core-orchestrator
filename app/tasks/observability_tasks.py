@@ -9,7 +9,7 @@ from app.models.observability import MetricSnapshot, SessionStatus
 from app.repositories.job import JobRepository
 from app.repositories.observability import ObservabilityRepository
 from app.tasks.celery_config import celery_app
-from app.tasks.shared import _make_session_maker
+from app.tasks.shared import JobProgress, _make_session_maker
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,7 @@ async def _run_collection_phase(
         raise ValueError(msg)
 
     vm_client = VictoriaMetricsClient(cluster.victoriametrics_url)
+    report = JobProgress(job_repo, job)
 
     # Phase 1: HEALTH CHECK
     await job_repo.update(
@@ -109,8 +110,7 @@ async def _run_collection_phase(
         raise RuntimeError(msg)
 
     # Phase 2: COLLECTING
-    await job_repo.update(job, current_phase="COLLECTING", progress_percentage=10)
-    await db_session.commit()
+    await report("COLLECTING", 10)
 
     duration = obs_session.collection_duration_seconds
     interval = obs_session.collection_interval_seconds

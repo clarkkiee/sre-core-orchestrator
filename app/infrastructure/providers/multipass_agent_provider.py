@@ -230,7 +230,7 @@ class MultipassAgentProvider(ClusterProvider):
         """Return True if the server VM exists (checked via agent)."""
         try:
             await self._ensure_agent_running()
-        except (AgentUnreachableError, Exception):  # noqa: BLE001
+        except (AgentUnreachableError, Exception):
             return False
 
         vm_info = await self._client.get_vm(self._server_vm_name(cluster_name))

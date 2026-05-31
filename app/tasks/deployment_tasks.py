@@ -10,7 +10,7 @@ from typing import Any
 from app.models.job import JobStatus
 from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
-from app.tasks.shared import _make_session_maker
+from app.tasks.shared import JobProgress, _make_session_maker
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,7 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
 
     git_client = GitClient(clone_base_dir=settings.GIT_CLONE_DIR)
     repo_path: Path | None = None
+    progress = JobProgress(job_repo, job)
 
     try:
         # Phase 0: CHECKING_CLUSTER (5%)
@@ -153,12 +154,7 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
 
         # Phase 1: CLONING_REPO (10%)
         await deployment_repo.update(deployment, status=DeploymentStatus.CLONING)
-        await job_repo.update(
-            job,
-            current_phase="CLONING_REPO",
-            progress_percentage=10,
-        )
-        await session.commit()
+        await progress("CLONING_REPO", 10)
 
         target_dir = f"deploy-{deployment.id}"
         repo_path = await to_thread(
@@ -174,12 +170,7 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
             deployment,
             status=DeploymentStatus.VALIDATING,
         )
-        await job_repo.update(
-            job,
-            current_phase="VALIDATING_CONFIG",
-            progress_percentage=30,
-        )
-        await session.commit()
+        await progress("VALIDATING_CONFIG", 30)
 
         platform_config = await to_thread(
             git_client.parse_platform_config,
@@ -217,12 +208,7 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
             deployment,
             status=DeploymentStatus.DEPLOYING,
         )
-        await job_repo.update(
-            job,
-            current_phase="DEPLOYING",
-            progress_percentage=50,
-        )
-        await session.commit()
+        await progress("DEPLOYING", 50)
 
         # Write kubeconfig to temp file for deployer
         kubeconfig_tmp = Path(mkdtemp()) / f"kubeconfig-{deployment.id}.yaml"
@@ -242,21 +228,11 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
         deploy_output = await deployer.deploy()
 
         # Phase 4: VERIFYING (70%)
-        await job_repo.update(
-            job,
-            current_phase="VERIFYING",
-            progress_percentage=70,
-        )
-        await session.commit()
-
+        await progress("VERIFYING", 70)
         await deployer.verify()
 
         # Phase 5: INJECT SERVICE MESH (80%)
-        await job_repo.update(
-            job, current_phase="LINKERD_INJECTION", progress_percentage=80
-        )
-        await session.commit()
-
+        await progress("LINKERD_INJECTION", 80)
         linkerd_manager = LinkerdManager(
             gateway_api_version=settings.GATEWAY_API_VERSION,
             kubectl_binary=settings.KUBECTL_BINARY,

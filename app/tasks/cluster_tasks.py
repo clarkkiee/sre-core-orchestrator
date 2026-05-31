@@ -14,7 +14,7 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
-from app.tasks.shared import _make_session_maker
+from app.tasks.shared import _make_session_maker, JobProgress
 from app.utils.config import settings
 from app.infrastructure.factories import build_litmus_manager, build_monitoring_deployer
 
@@ -123,20 +123,17 @@ async def _run_provisioning_phases(
     )
     await session.commit()
 
-    async def on_progress(phase: str, pct: int) -> None:
-        await job_repo.update(job, current_phase=phase, progress_percentage=pct)
-        await session.commit()
+    progress = JobProgress(job_repo, job)
 
     # Provider handles infra-specific phases (5-55%)
-    result = await provider.provision(cluster.kind_name, config, on_progress)
+    result = await provider.provision(cluster.kind_name, config, progress)
 
     # Phase: VERIFYING (60%)
-    await on_progress("VERIFYING", 60)
+    await progress("VERIFYING", 60)
     await verifier.verify_cluster_ready(result.kubeconfig_content)
 
     # Phase: DEPLOYING_MONITORING (70%)
-    await on_progress("DEPLOYING_MONITORING", 70)
-    
+    await progress("DEPLOYING_MONITORING", 70)
     
     monitoring_deployer = build_monitoring_deployer()
     vm_url = await monitoring_deployer.deploy(
@@ -147,7 +144,7 @@ async def _run_provisioning_phases(
     await session.commit()
 
     # Phase: DEPLOYING_LINKERD (80%)
-    await on_progress("DEPLOYING_LINKERD", 80)
+    await progress("DEPLOYING_LINKERD", 80)
     linkerd_manager = LinkerdManager(
         gateway_api_version=settings.GATEWAY_API_VERSION,
         kubectl_binary=settings.KUBECTL_BINARY,
@@ -156,7 +153,7 @@ async def _run_provisioning_phases(
     await linkerd_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 
     # Phase: DEPLOYING_LITMUS (85%)
-    await on_progress("DEPLOYING_LITMUS", 85)
+    await progress("DEPLOYING_LITMUS", 85)
     litmus_manager = build_litmus_manager()
     await litmus_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 

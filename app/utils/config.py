@@ -1,10 +1,16 @@
 """Application configuration settings."""
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
     # Application
     ENV: str = "development"
@@ -139,11 +145,6 @@ class Settings(BaseSettings):
             f"amqp://{self.RABBITMQ_USER}:{self.RABBITMQ_PASSWORD}"
             f"@{self.RABBITMQ_HOST}:{self.RABBITMQ_PORT}//"
         )
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"
 
 
 settings = Settings()

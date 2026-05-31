@@ -21,6 +21,7 @@ from app.tasks.shared import _make_session_maker
 from app.utils.config import settings
 from app.infrastructure.factories import build_litmus_manager
 from app.infrastructure.chaos.naming import TYPE_TO_LITMUS_NAME
+from app.tasks.shared import JobProgress
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,8 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
     experiment: ChaosExperiment,
 ) -> dict[str, str]:
     """Execute Chaos Experiment phases in order"""
-    
+
+    progress = JobProgress(job_repo, job)
     litmus_manager = build_litmus_manager()
 
     kubeconfig = cluster.kubeconfig
@@ -128,24 +130,14 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             raise RuntimeError(msg)  # noqa: TRY301
 
         # PHASE 2: PREPARING_RBAC (15%)
-        await job_repo.update(
-            job,
-            current_phase="PREPARING_RBAC",
-            progress_percentage=15,
-        )
-        await session.commit()
+        await progress("PREPARING_RBAC", 15)
 
         await litmus_manager.setup_experiment_rbac(
             kubeconfig_content=kubeconfig, namespace=experiment.target_namespace
         )
 
         # PHASE 3: CREATING_EXPERIMENT (30%)
-        await job_repo.update(
-            job,
-            current_phase="CREATING_EXPERIMENT",
-            progress_percentage=30,
-        )
-        await session.commit()
+        await progress("CREATING_EXPERIMENT", 30)
 
         # Resolve probe templates: 3-layer threshold chain (settings → deployment → experiment).
         deployment_repo = DeploymentRepository(session)
@@ -198,12 +190,7 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
         )
 
         # PHASE 4: INJECTING_CHAOS (50%)
-        await job_repo.update(
-            job,
-            current_phase="INJECTING_CHAOS",
-            progress_percentage=50,
-        )
-        await session.commit()
+        await progress("INJECTING_CHAOS", 50)
 
         eot_overhead = estimate_eot_probe_overhead_seconds(probes)
         timeout = experiment.duration_seconds + eot_overhead + _PRE_CHAOS_OVERHEAD + _POST_CHAOS_OVERHEAD
@@ -227,11 +214,7 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
         logger.info(chaos_result)
 
         # PHASE 5: RECORDING_RESULTS (90%)
-        await job_repo.update(
-            job,
-            current_phase="RECORDING_RESULTS",
-            progress_percentage=90,
-        )
+        await progress("RECORDING_RESULTS", 90)
         verdict = (
             chaos_result.get("status", {})
             .get("experimentStatus", {})
