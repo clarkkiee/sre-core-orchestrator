@@ -2,31 +2,29 @@ import asyncio
 import logging
 import os
 import tempfile
-from typing import Any, cast
+from http import HTTPStatus
+from typing import Any
 
 import aiohttp
 import yaml
 from kubernetes_asyncio import client
 from kubernetes_asyncio.client import ApiException
-from app.infrastructure.kubernetes.client import k8s_client
-from app.infrastructure.kubernetes.apply import apply_custom_object, apply_manifest
 
+from app.infrastructure.chaos import experiments
 from app.infrastructure.chaos.exceptions import (
+    ClusterNotReadyError,
     LitmusChaosExperimentError,
     LitmusCommandError,
     LitmusDeployError,
-    ClusterNotReadyError,
 )
-
+from app.infrastructure.config_values import get_renderer
 from app.infrastructure.constants import (
     LITMUS_CRD_GROUP,
+    LITMUS_CRD_VERSION,
     LITMUS_NAMESPACE,
-    LITMUS_CRD_VERSION
 )
-
-from app.infrastructure.chaos import experiments
-from app.infrastructure.config_values import get_renderer
-from http import HTTPStatus
+from app.infrastructure.kubernetes.apply import apply_custom_object, apply_manifest
+from app.infrastructure.kubernetes.client import k8s_client
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +194,7 @@ class LitmusChaosManager:
 
                 available = dep.status.available_replicas or 0
 
-            except (ApiException, aiohttp.ClientError, asyncio.TimeoutError):
+            except (TimeoutError, ApiException, aiohttp.ClientError):
                 return False
             else:
                 return bool(available)
@@ -224,9 +222,9 @@ class LitmusChaosManager:
                     env_vars=experiments.build_experiment_env_vars(exp_type),
                     needs_runtime_socket=experiments.needs_runtime_socket(exp_type)
                 )[0]
-                
+
                 await apply_custom_object(api_client, body, plural="chaosexperiments")
-                
+
             logger.info("Litmus RBAC + experiment templates ready in ns=%s", namespace)
 
     async def create_experiment(  # noqa: PLR0913
@@ -278,7 +276,7 @@ class LitmusChaosManager:
         timeout: int,  # noqa: ASYNC109
     ) -> dict[str, Any]:
         result_name = f"{engine_name}-{experiment_type}"
-        
+
         async with k8s_client(kubeconfig_content) as api_client:
             custom = client.CustomObjectsApi(api_client)
             elapsed = 0
@@ -311,7 +309,7 @@ class LitmusChaosManager:
 
             msg = f"Experiment {result_name} did not complete within {timeout}s"
             raise LitmusChaosExperimentError(msg)
-            
+
 
     async def delete_experiment(
         self,
@@ -319,7 +317,7 @@ class LitmusChaosManager:
         namespace: str,
         engine_name: str,
     ) -> None:
-        
+
         async with k8s_client(kubeconfig_content) as api_client:
             try:
                 custom = client.CustomObjectsApi(api_client)
@@ -430,8 +428,8 @@ class LitmusChaosManager:
                     )
                     return
 
-                except (ApiException, aiohttp.ClientError, asyncio.TimeoutError) as e:
+                except (TimeoutError, ApiException, aiohttp.ClientError) as e:
                     last_reason = f"API error: {e}"
                     await asyncio.sleep(interval_s)
-                    
+
         raise ClusterNotReadyError(last_reason, timeout_s)

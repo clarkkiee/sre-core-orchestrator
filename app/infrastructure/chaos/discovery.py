@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from kubernetes_asyncio import client
+
 from app.infrastructure.kubernetes.client import k8s_client
 
 logger = logging.getLogger(__name__)

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any
 
+from app.infrastructure.config_values import load_cluster_profile
 from app.infrastructure.multipass.cloud_init import CloudInitBuilder
 from app.infrastructure.multipass.exceptions import MultipassVMNotFoundError
 from app.infrastructure.multipass.k3s_bootstrap import K3sBootstrapper
@@ -15,7 +16,6 @@ from app.infrastructure.providers.base import (
     ProvisionResult,
 )
 from app.utils.config import settings
-from app.infrastructure.config_values import load_cluster_profile
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class MultipassK3sSSHProvider(ClusterProvider):
         cluster_name: str,  # noqa: ARG002
         worker_count: int,
     ) -> dict[str, Any]:
-        
+
         profile = load_cluster_profile()
 
         return {
@@ -78,11 +78,11 @@ class MultipassK3sSSHProvider(ClusterProvider):
         config: dict[str, Any],
         on_progress: ProgressCallback | None = None,
     ) -> ProvisionResult:
-        
+
         profile = load_cluster_profile()
         worker_count = config.get("worker_count", 2)
-        server = config.get("server_profile", profile["server"])        
-        worker = config.get("worker_profile", profile["worker"])        
+        server = config.get("server_profile", profile["server"])
+        worker = config.get("worker_profile", profile["worker"])
 
 
         server_vm = self._server_vm_name(cluster_name)

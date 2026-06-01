@@ -22,7 +22,7 @@ class LitmusChaosExperimentError(Exception):
 
 class ClusterNotReadyError(Exception):
     """Raised when the cluster fails to reach a ready state within the timeout"""
-    
+
     def __init__(self, reason: str, elapsed_s: int) -> None:
         self.reason = reason
         self.elapsed_s = elapsed_s

@@ -5,10 +5,10 @@ import statistics
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.infrastructure.metrics.client import VictoriaMetricsClient
-from app.models.chaos import ChaosExperiment
 from app.infrastructure.metrics.catalog import MetricCatalog
+from app.infrastructure.metrics.client import VictoriaMetricsClient
 from app.infrastructure.metrics.query_engine import parse_range_response
+from app.models.chaos import ChaosExperiment
 from app.models.evaluation_indicator import (
     ISOIndicator,
     MeasurementScope,
@@ -59,31 +59,31 @@ async def extract_baseline_metrics(
     baseline_start: datetime,
     baseline_end: datetime,
 ) -> dict[str, float | None]:
-    
+
     metric_to_key = {
         "linkerd_response_latency_p99_ms": "baseline_p99_ms",
         "linkerd_response_latency_p95_ms": "baseline_p95_ms",
         "linkerd_success_rate": "baseline_success_rate",
         "linkerd_error_rate": "baseline_error_rate",
     }
-    
+
     target_name = (
         target_label.split("=", 1)[1].strip()
         if "=" in target_label else target_label
     )
-    
+
     params = {"ns": namespace, "window": "30s"}
     result: dict[str, float | None] = {}
-    
+
     for metric_name, key in metric_to_key.items():
 
         try:
             definition = catalog.get(metric_name)
-        except KeyError as e:
+        except KeyError:
             logger.warning("Baseline metric not in catalog")
             result[key] = None
             continue
-        
+
         promql = definition.render(params)
         try:
             resp = await vm_client.range_query(
@@ -99,15 +99,15 @@ async def extract_baseline_metrics(
             )
             result[key] = None
             continue
-        
+
         values: list[float] = []
         for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
             if labels.get("workload") and labels["workload"] != target_name:
                 continue
             values.append(value)
-            
+
         result[key] = (sum(values) / len(values)) if values else None
-        
+
     return result
 
 
@@ -252,12 +252,12 @@ def compute_mean_recovery_time(
     recovery_samples: list[RawMetricSample],
     step_seconds: float = 5.0
 ) -> dict[str, Any]:
-    
+
     all_samples = sorted(
         [s for s in (fault_samples + recovery_samples) if s.value is not None],
         key=lambda s: s.timestamp
     )
-    
+
     if not all_samples:
         return {
             "value": None,
@@ -265,7 +265,7 @@ def compute_mean_recovery_time(
             "episode_count": 0,
             "extra": None,
         }
-        
+
     episodes: list[tuple[datetime, datetime]] = []
     ep_start: datetime | None = None
     ep_last: datetime | None = None
@@ -276,17 +276,16 @@ def compute_mean_recovery_time(
             if ep_start is None:
                 ep_start = s.timestamp
             ep_last = s.timestamp
-        else:
-            if ep_start is not None and ep_last is not None:
-                episodes.append((ep_start, ep_last))
-                ep_start = None
-                ep_last = None
-                
+        elif ep_start is not None and ep_last is not None:
+            episodes.append((ep_start, ep_last))
+            ep_start = None
+            ep_last = None
+
     # jika episode kegagalan masih terbuka hingga akhir window
     incomplete = ep_start is not None and ep_last is not None
     if incomplete:
         episodes.append((ep_start, ep_last))  # type: ignore
-        
+
     if not episodes:
         return {
             "value": 0.0,
@@ -297,23 +296,23 @@ def compute_mean_recovery_time(
                 "source": "probe_success"
             }
         }
-    
+
     durations = [
         (end - start).total_seconds() + step_seconds
         for start, end in episodes
     ]
-    
+
     mrt = sum(durations) / len(durations)
-    
+
     extra: dict[str, Any] = {
         "source": "probe_success",
         "episode_durations_s": [round(d, 3) for d in durations],
         "step_seconds": step_seconds,
     }
-    
+
     if incomplete:
         extra["note"] = "incomplete_recovery"
-    
+
     return {
         "value": round(mrt, 3),
         "sample_count": len(all_samples),
@@ -920,14 +919,14 @@ def _infer_step(samples: list[RawMetricSample], default: float = 5.0) -> float:
     """Estimate the step interval in seconds from consecutive timestamps."""
     if len(samples) < 2:
         return default
-    
+
     from collections import defaultdict
     by_series = defaultdict(list)
-    
+
     for s in samples:
         key = frozenset(s.labels.items()) if s.labels else frozenset()
         by_series[key].append(s.timestamp)
-        
+
     series_steps = []
     for ts_list in by_series.values():
         if len(ts_list) < 2:
@@ -939,7 +938,7 @@ def _infer_step(samples: list[RawMetricSample], default: float = 5.0) -> float:
         if deltas:
             series_steps.append(statistics.median(deltas))
     return statistics.median(series_steps) if series_steps else default
-    
+
 
 def window_seconds(start: datetime, end: datetime) -> float:
     return (end - start).total_seconds()
@@ -962,7 +961,7 @@ def build_indicator_rows(
     return {
         "evaluation_id": evaluation_id,
         "indicator": indicator,
-        "sub_characteristic": derive_sub_characteristic(indicator, phase_value), 
+        "sub_characteristic": derive_sub_characteristic(indicator, phase_value),
         "phase": phase,
         "scope": scope,
         "value": result["value"],

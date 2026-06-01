@@ -2,17 +2,17 @@
 
 import asyncio
 import logging
+from http import HTTPStatus
 from typing import Any
 
 import httpx
-from http import HTTPStatus
 from kubernetes_asyncio import client
 from kubernetes_asyncio.client import ApiClient
-from app.infrastructure.kubernetes.client import k8s_client
-from app.infrastructure.kubernetes.apply import apply_manifest
 
 from app.infrastructure.config_values import get_renderer
 from app.infrastructure.constants import MONITORING_NAMESPACE
+from app.infrastructure.kubernetes.apply import apply_manifest
+from app.infrastructure.kubernetes.client import k8s_client
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class MonitoringStackDeployer:
                 api_client,
                 label_selector="app=victoria-metrics",
             )
-                
+
         host = control_plane_ip
         vm_url = f"http://{host}:{self._vm_nodeport}"
         await self._health_check(vm_url)
@@ -71,36 +71,36 @@ class MonitoringStackDeployer:
     async def _apply_namespace(self, api_client: ApiClient) -> None:
         ns = get_renderer().render_to_dicts("monitoring/namespace.yaml")[0]
         await apply_manifest(api_client, ns)
-    
+
     async def _apply_blackbox_exporter(self, api_client: ApiClient) -> None:
         manifests = get_renderer().render_to_dicts(
             "monitoring/blackbox-exporter.yaml.j2", bbe_image=self._bbe_image
         )
-        
+
         for m in manifests:
             await apply_manifest(api_client, m)
         logger.info("prometheus-blackbox-exporter manifests applied")
-        
+
     async def _apply_kube_state_metrics(self, api_client: ApiClient) -> None:
         manifests = get_renderer().render_to_dicts(
         "monitoring/kube-state-metrics.yaml.j2", ksm_image=self._ksm_image
         )
-        
+
         for m in manifests:
             await apply_manifest(api_client, m)
         logger.info("kube-state-metrics manifests applied")
-        
+
     async def _apply_victoriametrics(self, api_client: ApiClient) -> None:
         manifests = get_renderer().render_to_dicts(
-            "monitoring/victoria-metrics.yaml.j2", 
+            "monitoring/victoria-metrics.yaml.j2",
             vm_image=self._vm_image,
             vm_nodeport=self._vm_nodeport
         )
-        
+
         for m in manifests:
             await apply_manifest(api_client, m)
         logger.info("victoriametrics manifests applied")
-        
+
     async def _wait_for_ready(
         self,
         api_client: ApiClient,

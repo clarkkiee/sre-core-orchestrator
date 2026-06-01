@@ -32,7 +32,6 @@ from app.models.experiment_evaluation import (  # noqa: E402
     ExperimentEvaluation,
 )
 from app.models.job import Job, JobStatus, JobType  # noqa: E402
-
 from app.models.probe_result import (  # noqa: E402
     ProbeMode,
     ProbeResult,

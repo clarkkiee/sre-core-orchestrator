@@ -11,13 +11,13 @@ from app.infrastructure.agent.exceptions import (
     AgentTaskFailedError,
     AgentUnreachableError,
 )
+from app.infrastructure.config_values import load_cluster_profile
 from app.infrastructure.multipass.ssh_manager import SSHConfig
 from app.infrastructure.providers.base import (
     ClusterProvider,
     ProgressCallback,
     ProvisionResult,
 )
-from app.infrastructure.config_values import load_cluster_profile
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
@@ -129,7 +129,7 @@ class MultipassAgentProvider(ClusterProvider):
 
         profile = load_cluster_profile()
         sizing = config.get("worker_profile", profile["worker"])
-        
+
         await self._client.submit_provision(
             task_id=task_id,
             cluster_name=cluster_name,

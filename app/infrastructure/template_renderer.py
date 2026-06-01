@@ -30,7 +30,7 @@ class TemplateRenderer:
             undefined=StrictUndefined
         )
         self._env.filters["to_yaml"] = _to_yaml_filter
-        
+
     def render_to_dicts(self, template_name: str, **ctx: Any) -> list[dict[str, Any]]:
         rendered = self._env.get_template(template_name).render(**ctx)
         docs = list(yaml.safe_load_all(rendered))
@@ -38,5 +38,5 @@ class TemplateRenderer:
         logger.debug(
             "Rendered template %r -> %d document(s)", template_name, len(result)
         )
-        
+
         return result

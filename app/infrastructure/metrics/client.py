@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime
+from http import HTTPStatus
 from typing import Any
 
 import httpx
-from http import HTTPStatus
 
 _DEFAULT_TIMEOUT = 30.0
 _SCALAR_RESULT_LENGTH = 2

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 from http import HTTPStatus
+from typing import Any
 
 import httpx
 

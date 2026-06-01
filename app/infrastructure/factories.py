@@ -1,7 +1,8 @@
 from app.infrastructure.chaos.manager import LitmusChaosManager
-from app.infrastructure.metrics.deployer import MonitoringStackDeployer
 from app.infrastructure.config_values import load_values
+from app.infrastructure.metrics.deployer import MonitoringStackDeployer
 from app.utils.config import settings
+
 
 def build_litmus_manager() -> LitmusChaosManager:
     litmus = load_values()["litmus"]
@@ -10,7 +11,7 @@ def build_litmus_manager() -> LitmusChaosManager:
         litmus_runner_image=litmus["runner_image"],
         litmus_version=litmus["version"]
     )
-    
+
 def build_monitoring_deployer() -> MonitoringStackDeployer:
     monitoring = load_values()["monitoring"]
     return MonitoringStackDeployer(

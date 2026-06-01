@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import tempfile
+from http import HTTPStatus
 
 import httpx
 
@@ -10,7 +11,6 @@ from app.infrastructure.servicemesh.exceptions import (
     LinkerdDeployError,
 )
 from app.utils.config import settings
-from http import HTTPStatus
 
 logger = logging.getLogger(__name__)
 

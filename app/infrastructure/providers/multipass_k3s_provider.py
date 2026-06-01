@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.infrastructure.config_values import load_cluster_profile
 from app.infrastructure.multipass.client import MultipassClient
 from app.infrastructure.multipass.cloud_init import CloudInitBuilder
 from app.infrastructure.multipass.exceptions import MultipassVMNotFoundError
@@ -18,7 +19,6 @@ from app.infrastructure.providers.base import (
     ProvisionResult,
 )
 from app.utils.config import settings
-from app.infrastructure.config_values import load_cluster_profile
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +72,11 @@ class MultipassK3sProvider(ClusterProvider):
         config: dict[str, Any],
         on_progress: ProgressCallback | None = None,
     ) -> ProvisionResult:
-        
+
         profile = load_cluster_profile()
         worker_count = config.get("worker_count", 2)
-        server = config.get("server_profile", profile["server"])        
-        worker = config.get("worker_profile", profile["worker"])        
+        server = config.get("server_profile", profile["server"])
+        worker = config.get("worker_profile", profile["worker"])
 
         server_vm = self._server_vm_name(cluster_name)
 
