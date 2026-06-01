@@ -2,12 +2,25 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
 from string import Template
 from typing import Any, TypedDict
 
 from app.utils.config import Settings
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class ProbeBuildContext:
+    experiment_type: str
+    namespace: str
+    target_label: str
+    target_port: str
+    prom_url: str | None
+    service_protocol: str = "http"
+    target_clusterip: str = ""
+    deployment_thresholds: dict[str, Any] | None = None
+    experiment_configuration: dict[str, Any] | None = None
 
 class ProbeOverrides(TypedDict, total=False):
     override: list[dict[str, Any]]
@@ -35,8 +48,6 @@ def _global_thresholds(settings: Settings) -> dict[str, Any]:
         "tcp_probe_image": settings.PROBE_DEFAULT_TCP_CMD_PROBE_IMAGE,
         "kubectl_probe_image": settings.PROBE_DEFAULT_KUBECTL_PROBE_IMAGE
     }
-
-# HELPERS
 
 def _tcp_connect_command() -> str:
     return "nc -z -w 3 ${target_clusterip} ${target_port} && echo 'OK' || echo 'FAIL'"
@@ -471,12 +482,6 @@ def _seconds(value: Any, default: int) -> int:
 
 
 def estimate_eot_probe_overhead_seconds(probes: list[dict[str, Any]]) -> int:
-    """Estimate worst-case additional runtime from all rendered EOT probes.
-
-    Litmus EOT probes may run after the chaos duration finishes. When many EOT probes
-    are configured, a static timeout can under-estimate total runtime and trigger
-    false experiment timeouts.
-    """
     total = 0
     eot_breakdown = []
 
@@ -518,47 +523,40 @@ def estimate_eot_probe_overhead_seconds(probes: list[dict[str, Any]]) -> int:
     return total
 
 def build_probes(
+    target: ProbeBuildContext,
     *,
-    experiment_type: str,
-    namespace: str,
-    target_label: str,
-    target_port: str,
-    service_protocol: str = "http",
-    target_clusterip: str = "",
-    prom_url: str | None,
-    settings: Settings,
-    deployment_thresholds: dict[str, Any] | None = None,
-    experiment_configuration: dict[str, Any] | None = None,
+    settings: Settings
 ) -> list[dict[str, Any]]:
 
-    overrides: ProbeOverrides = (experiment_configuration or {}).get("probes") or {}
+    overrides: ProbeOverrides = (target.experiment_configuration or {}).get("probes") or {}
 
     thresholds = resolve_thresholds(
         experiment_overrides=overrides.get("thresholds"),
-        deployment_thresholds=deployment_thresholds,
+        deployment_thresholds=target.deployment_thresholds,
         settings=settings,
     )
 
     ctx = {
         **thresholds,
-        "namespace": namespace,
-        "target_label": target_label,
-        "target_name": _extract_target_name(target_label),
-        "target_port": target_port,
-        "target_clusterip": target_clusterip,
-        "prom_url": prom_url or "",
+        "namespace": target.namespace,
+        "target_label": target.target_label,
+        "target_name": _extract_target_name(target.target_label),
+        "target_port": target.target_port,
+        "target_clusterip": target.target_clusterip,
+        "prom_url": target.prom_url or "",
         "tcp_probe_image": settings.PROBE_DEFAULT_TCP_CMD_PROBE_IMAGE
     }
 
-    if overrides.get("override"):
-        raw_templates: list[dict[str, Any]] = list(overrides["override"])
+    override_templates = overrides.get("override")
+    if override_templates:
+        raw_templates: list[dict[str, Any]] = list(override_templates)
     else:
         registry = (
             DEFAULT_PROBE_TEMPLATES
-            if service_protocol.lower().strip() == "http"
+            if target.service_protocol.lower().strip() == "http"
             else DEFAULT_TCP_PROBE_TEMPLATES
         )
-        raw_templates = list(registry.get(experiment_type, []))
+        raw_templates = list(registry.get(target.experiment_type, []))
         disable = set(overrides.get("disable") or [])
         if disable:
             raw_templates = [
@@ -579,14 +577,13 @@ def build_probes(
                 spec.get("name", "unknown") if isinstance(spec, dict) else "unknown",
             )
             continue
-        if spec.get("type") == "promProbe" and not prom_url:
+        if spec.get("type") == "promProbe" and not target.prom_url:
             logger.warning(
                 "Skipping promProbe %s: cluster has no victoriametrics_url",
                 spec.get("name"),
             )
             continue
 
-        # Log rendered probe details for diagnostics
         if spec.get("mode", "").upper() == "EOT":
             rp = spec.get("runProperties", {})
             logger.debug(

@@ -36,6 +36,7 @@ from app.tasks.chaos_tasks import (
 )
 from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
+from app.infrastructure.chaos.probes import ProbeBuildContext
 
 logger = logging.getLogger(__name__)
 
@@ -170,16 +171,18 @@ async def _run_single_experiment(  # noqa: PLR0913
         experiment_configuration["probes"] = probes_cfg
 
         probes = build_probes(
-            experiment_type=litmus_name,
-            namespace=experiment.target_namespace,
-            target_label=experiment.target_label,
-            target_port=target_port,
-            service_protocol=service_protocol,
-            target_clusterip=target_clusterip,
-            prom_url=vm_url,
-            settings=settings,
-            deployment_thresholds=deployment_thresholds,
-            experiment_configuration=experiment_configuration,
+            ProbeBuildContext(
+                experiment_type=litmus_name,
+                namespace=experiment.target_namespace,
+                target_label=experiment.target_label,
+                target_port=target_port,
+                service_protocol=service_protocol,
+                target_clusterip=target_clusterip,
+                prom_url=vm_url,
+                deployment_thresholds=deployment_thresholds,
+                experiment_configuration=experiment_configuration,
+            ),
+            settings=settings
         )
 
         await chaos_repo.update(

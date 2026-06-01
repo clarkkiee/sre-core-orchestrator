@@ -26,6 +26,7 @@ from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
 from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
+from app.infrastructure.chaos.probes import ProbeBuildContext
 
 logger = logging.getLogger(__name__)
 
@@ -139,30 +140,32 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
             kubeconfig, experiment.target_namespace, experiment.target_label
         )
         probes = build_probes(
-            experiment_type=litmus_name,
-            namespace=experiment.target_namespace,
-            target_label=experiment.target_label,
-            target_port=(
-                str(service_target["port"])
-                if service_target and "port" in service_target
-                else str(settings.PROBE_DEFAULT_TARGET_PORT)
+            ProbeBuildContext(
+                experiment_type=litmus_name,
+                namespace=experiment.target_namespace,
+                target_label=experiment.target_label,
+                target_port=(
+                    str(service_target["port"])
+                    if service_target and "port" in service_target
+                    else str(settings.PROBE_DEFAULT_TARGET_PORT)
+                ),
+                service_protocol=(
+                    str(service_target.get("protocol", "http"))
+                    if service_target
+                    else "http"
+                ),
+                target_clusterip=(
+                    str(service_target.get("clusterIP", ""))
+                    if service_target
+                    else ""
+                ),
+                prom_url=cluster.victoriametrics_url,
+                deployment_thresholds=(
+                    deployment.probe_thresholds if deployment else None
+                ),
+                experiment_configuration=experiment.configuration,
             ),
-            service_protocol=(
-                str(service_target.get("protocol", "http"))
-                if service_target
-                else "http"
-            ),
-            target_clusterip=(
-                str(service_target.get("clusterIP", ""))
-                if service_target
-                else ""
-            ),
-            prom_url=cluster.victoriametrics_url,
-            settings=settings,
-            deployment_thresholds=(
-                deployment.probe_thresholds if deployment else None
-            ),
-            experiment_configuration=experiment.configuration,
+            settings=settings
         )
 
         await litmus_manager.create_experiment(
