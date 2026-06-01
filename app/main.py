@@ -14,7 +14,6 @@ from app.routers.clusters import router as clusters_router
 from app.routers.deployments import router as deployments_router
 from app.routers.evaluations import router as evaluation_router
 from app.routers.metrics import router as metrics_router
-from app.routers.observability import router as observability_router
 from app.routers.users import router as users_router
 
 
@@ -49,7 +48,6 @@ api_router.include_router(auth_router)
 api_router.include_router(users_router)
 api_router.include_router(clusters_router)
 api_router.include_router(deployments_router)
-api_router.include_router(observability_router)
 api_router.include_router(chaos_router)
 api_router.include_router(campaign_router)
 api_router.include_router(metrics_router)

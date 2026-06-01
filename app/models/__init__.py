@@ -32,11 +32,7 @@ from app.models.experiment_evaluation import (  # noqa: E402
     ExperimentEvaluation,
 )
 from app.models.job import Job, JobStatus, JobType  # noqa: E402
-from app.models.observability import (  # noqa: E402
-    MetricSnapshot,
-    ObservabilitySession,
-    ReliabilityReport,
-)
+
 from app.models.probe_result import (  # noqa: E402
     ProbeMode,
     ProbeResult,
@@ -69,13 +65,10 @@ __all__ = [
     "JobType",
     "MeasurementScope",
     "MetricPhase",
-    "MetricSnapshot",
-    "ObservabilitySession",
     "ProbeMode",
     "ProbeResult",
     "ProbeType",
     "ProbeVerdict",
     "RawMetricSample",
-    "ReliabilityReport",
     "User",
 ]
