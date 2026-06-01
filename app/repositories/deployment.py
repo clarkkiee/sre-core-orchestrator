@@ -3,21 +3,12 @@
 import uuid
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.deployment import Deployment
+from app.repositories.base import BaseRepository
 
 
-class DeploymentRepository:
-    def __init__(self, db: AsyncSession) -> None:
-        self.db = db
-
-    async def create(self, deployment: Deployment) -> Deployment:
-        self.db.add(deployment)
-        await self.db.flush()
-        await self.db.refresh(deployment)
-        return deployment
-
+class DeploymentRepository(BaseRepository[Deployment]):
     async def get_by_id(self, deployment_id: uuid.UUID) -> Deployment | None:
         result = await self.db.execute(
             select(Deployment).where(Deployment.id == deployment_id),
@@ -59,10 +50,3 @@ class DeploymentRepository:
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
-
-    async def update(self, deployment: Deployment, **fields: object) -> Deployment:
-        for key, value in fields.items():
-            setattr(deployment, key, value)
-        await self.db.flush()
-        await self.db.refresh(deployment)
-        return deployment

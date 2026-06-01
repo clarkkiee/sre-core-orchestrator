@@ -3,14 +3,26 @@
 import asyncio
 import logging
 import uuid
+from asyncio import to_thread
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.infrastructure.deployers.factory import DeployerFactory
+from app.infrastructure.git import GitClient
+from app.infrastructure.kubernetes import ClusterHealthChecker
+from app.infrastructure.servicemesh.manager import LinkerdManager
+from app.models.cluster import ClusterStatus
+from app.models.deployment import DeploymentStatus, DeployStrategy
 from app.models.job import JobStatus
+from app.repositories.cluster import ClusterRepository
+from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
-from app.tasks.shared import JobProgress, _make_session_maker
+from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
@@ -71,30 +83,18 @@ async def _record_deployment_failure(
     *,
     prefix: str = "",
 ) -> None:
-    """Record a failure on Deployment and Job in a fresh DB session."""
-    from app.models.deployment import DeploymentStatus
-    from app.repositories.deployment import DeploymentRepository
-
-    async with _make_session_maker()() as err_session:
-        d_repo = DeploymentRepository(err_session)
-        j_repo = JobRepository(err_session)
-        deployment = await d_repo.get_by_id(deployment_id)
-        job = await j_repo.get_by_id(job_id)
-        status_msg = f"{prefix}{exc!s}" if prefix else str(exc)
+    async def _entity(session: AsyncSession) -> None:
+        repo = DeploymentRepository(session)
+        deployment = await repo.get_by_id(deployment_id)
         if deployment:
-            await d_repo.update(
+            await repo.update(
                 deployment,
                 status=DeploymentStatus.FAILED,
-                status_message=status_msg[:500],
+                status_message=(f"{prefix}{exc!s}" if prefix else str(exc))[:500],
+                completed_at=datetime.now(UTC)
             )
-        if job:
-            await j_repo.update(
-                job,
-                status=JobStatus.FAILED,
-                error_message=str(exc)[:1000],
-                completed_at=datetime.now(UTC),
-            )
-        await err_session.commit()
+
+    await record_job_failure(job_id, exc, update_entity=_entity)
 
 
 async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
@@ -105,18 +105,6 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
     session: Any,  # noqa: ANN401
     github_token: str | None = None,
 ) -> dict[str, str]:
-    """Execute deployment phases in order."""
-    from asyncio import to_thread
-    from tempfile import mkdtemp
-
-    from app.infrastructure.deployers.factory import DeployerFactory
-    from app.infrastructure.git import GitClient
-    from app.infrastructure.kubernetes import ClusterHealthChecker
-    from app.infrastructure.servicemesh.manager import LinkerdManager
-    from app.models.cluster import ClusterStatus
-    from app.models.deployment import DeploymentStatus, DeployStrategy
-    from app.repositories.cluster import ClusterRepository
-
     cluster_repo = ClusterRepository(session)
     cluster = await cluster_repo.get_by_id(deployment.cluster_id)
     if not cluster or not cluster.kubeconfig:
@@ -266,7 +254,6 @@ async def _run_deployment_phases(  # noqa: PLR0913, PLR0915
         return {"status": "completed", "deployment_id": str(deployment.id)}
 
     finally:
-        # Always clean up cloned repo
         if repo_path:
             await to_thread(git_client.cleanup, repo_path)
 
@@ -276,7 +263,6 @@ async def _deploy_application(
     job_id: str,
     github_token: str | None = None,
 ) -> dict[str, str]:
-    from app.repositories.deployment import DeploymentRepository
 
     did = uuid.UUID(deployment_id)
     jid = uuid.UUID(job_id)
@@ -317,11 +303,6 @@ async def _delete_deployment(
     deployment_id: str,
     job_id: str,
 ) -> dict[str, str]:
-    """Delete a deployment's K8s resources and mark it as deleted."""
-    from app.models.deployment import DeploymentStatus
-    from app.repositories.cluster import ClusterRepository
-    from app.repositories.deployment import DeploymentRepository
-
     did = uuid.UUID(deployment_id)
     jid = uuid.UUID(job_id)
 
@@ -349,8 +330,6 @@ async def _delete_deployment(
 
             cluster = await cluster_repo.get_by_id(deployment.cluster_id)
             if cluster and cluster.kubeconfig:
-                from tempfile import mkdtemp
-
                 kubeconfig_tmp = Path(mkdtemp()) / f"kubeconfig-{deployment.id}.yaml"
                 kubeconfig_tmp.write_text(cluster.kubeconfig, encoding="utf-8")
 

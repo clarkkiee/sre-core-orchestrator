@@ -1,10 +1,12 @@
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from app.models.job import Job
-from app.repositories.job import JobRepository
 
+from app.models.job import Job, JobStatus
+from app.repositories.job import JobRepository
 from app.utils.config import settings
 
 
@@ -47,3 +49,25 @@ class JobProgress:
             self._job, current_phase=phase, progress_percentage=pct
         )
         await self._repo.db.commit()
+
+
+async def record_job_failure(
+    job_id: uuid.UUID,
+    exc: Exception,
+    *,
+    update_entity: Callable[[AsyncSession], Awaitable[None]] | None = None
+) -> None:
+    async with _make_session_maker()() as session:
+        if update_entity is not None:
+            await update_entity(session)
+
+        job_repo = JobRepository(session)
+        job = await job_repo.get_by_id(job_id)
+        if job:
+            await job_repo.update(
+                job,
+                status=JobStatus.FAILED,
+                error_message=str(exc)[:1000],
+                completed_at=datetime.now(UTC)
+            )
+        await session.commit()

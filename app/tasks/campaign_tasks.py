@@ -4,34 +4,38 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.infrastructure.chaos import experiments
 from app.infrastructure.chaos.discovery import discover_services
 from app.infrastructure.chaos.exceptions import ClusterNotReadyError
 from app.infrastructure.chaos.manager import LitmusChaosManager
+from app.infrastructure.chaos.naming import LITMUS_NAME_TO_TYPE
 from app.infrastructure.chaos.probes import (
     build_probes,
+    derive_thresholds_from_baseline,
     estimate_eot_probe_overhead_seconds,
 )
-from app.tasks.chaos_tasks import _fetch_chaos_injected_time
-from app.infrastructure.metrics.client import VictoriaMetricsClient
+from app.infrastructure.factories import build_litmus_manager
 from app.infrastructure.metrics.catalog import MetricCatalog
-from app.services.evaluation import extract_baseline_metrics
-from app.infrastructure.chaos.probes import derive_thresholds_from_baseline
+from app.infrastructure.metrics.client import VictoriaMetricsClient
 from app.models.campaign import CampaignStatus, ChaosCampaign
-from app.models.chaos import ChaosExperiment, ChaosExperimentStatus, ExperimentType
+from app.models.chaos import ChaosExperiment, ChaosExperimentStatus
 from app.models.job import Job, JobStatus
 from app.repositories.campaign import CampaignRepository
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
-from app.services.evaluation import EVALUATION_WINDOW_SECONDS
+from app.services.evaluation import EVALUATION_WINDOW_SECONDS, extract_baseline_metrics
 from app.tasks.celery_config import celery_app
-from app.tasks.chaos_tasks import _POST_CHAOS_OVERHEAD, _PRE_CHAOS_OVERHEAD
-from app.tasks.shared import JobProgress, _make_session_maker
+from app.tasks.chaos_tasks import (
+    _POST_CHAOS_OVERHEAD,
+    _PRE_CHAOS_OVERHEAD,
+    _fetch_chaos_injected_time,
+)
+from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
-from app.infrastructure.chaos import experiments
-from app.infrastructure.factories import build_litmus_manager
-from app.infrastructure.chaos.naming import LITMUS_NAME_TO_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -55,33 +59,23 @@ def run_chaos_campaign_task(
     return asyncio.run(
         _run_chaos_campaign(campaign_id=campaign_id, job_id=job_id)
     )
- 
+
 async def _record_campaign_failure(
     campaign_id: uuid.UUID,
     job_id: uuid.UUID,
     exc: Exception,
 ) -> None:
-    """Record a campaign-level failure in a fresh DB session."""
-    async with _make_session_maker()() as session:
-        c_repo = CampaignRepository(session)
-        j_repo = JobRepository(session)
-        campaign = await c_repo.get_by_id(campaign_id)
-        job = await j_repo.get_by_id(job_id)
-        if campaign:
-            await c_repo.update(
-                campaign,
-                status=CampaignStatus.FAILED,
-                status_message=str(exc)[:500],
-                completed_at=datetime.now(UTC),
+    async def _entity(session: AsyncSession) -> None:
+        repo = CampaignRepository(session)
+        exp = await repo.get_by_id(campaign_id)
+        if exp:
+            msg = str(exc)
+            await repo.update(
+                exp, status=CampaignStatus.FAILED,
+                status_message=msg[:500],
+                completed_at=datetime.now(UTC)
             )
-        if job:
-            await j_repo.update(
-                job,
-                status=JobStatus.FAILED,
-                error_message=str(exc)[:1000],
-                completed_at=datetime.now(UTC),
-            )
-        await session.commit()
+    await record_job_failure(job_id, exc, update_entity=_entity)
 
 
 async def _run_single_experiment(  # noqa: PLR0913
@@ -116,14 +110,14 @@ async def _run_single_experiment(  # noqa: PLR0913
             interval_s=settings.CLUSTER_READY_INTERVAL_S,
             require_no_active_engine=settings.CLUSTER_READY_REQUIRE_NO_ACTIVE_ENGINE,
         )
-        
+
         await chaos_repo.update(
             experiment,
             status=ChaosExperimentStatus.RUNNING,
             started_at=datetime.now(UTC),
         )
         await session.commit()
-        
+
         # BASELINE PHASE
         baseline_start = datetime.now(UTC)
         logger.info(
@@ -132,7 +126,7 @@ async def _run_single_experiment(  # noqa: PLR0913
         )
         await asyncio.sleep(EVALUATION_WINDOW_SECONDS)
         baseline_end = datetime.now(UTC)
-        
+
         # EXTRACT BASELINE METRICS
         derived_thresholds: dict[str, Any] = {}
         baseline_metrics: dict[str, float | None] = {}
@@ -140,7 +134,7 @@ async def _run_single_experiment(  # noqa: PLR0913
         if settings.BASELINE_METRICS_ENABLED and vm_url:
             vm_client = VictoriaMetricsClient(vm_url)
             catalog = MetricCatalog.load_from_dir()
-            
+
             baseline_metrics = await extract_baseline_metrics(
                 baseline_start=baseline_start,
                 baseline_end=baseline_end,
@@ -149,28 +143,28 @@ async def _run_single_experiment(  # noqa: PLR0913
                 target_label=experiment.target_label,
                 vm_client=vm_client
             )
-            
+
             derived_thresholds = derive_thresholds_from_baseline(
                 baseline_metrics=baseline_metrics,
                 settings=settings
             )
-            
+
             logger.info(
                 "Baseline derived probe thresholds for experiment=%s: %s",
                 experiment.id, derived_thresholds,
             )
-            
+
         # Build probes with derived thresholds
         deployment_repo = DeploymentRepository(session)
         deployment = await deployment_repo.get_by_id(experiment.deployment_id)
         deployment_thresholds = deployment.probe_thresholds if deployment and deployment.probe_thresholds else {}
         if health_path:
             deployment_thresholds["target_health_path"] = health_path
-        
+
         experiment_configuration = dict(experiment.configuration or {})
         probes_cfg = dict(experiment_configuration.get("probes") or {})
         existing_thresholds = dict(probes_cfg.get("thresholds") or {})
-        
+
         merged_thresholds = {**derived_thresholds, **existing_thresholds}
         probes_cfg["thresholds"] = merged_thresholds
         experiment_configuration["probes"] = probes_cfg
@@ -187,7 +181,7 @@ async def _run_single_experiment(  # noqa: PLR0913
             deployment_thresholds=deployment_thresholds,
             experiment_configuration=experiment_configuration,
         )
-        
+
         await chaos_repo.update(
             experiment,
             baseline_metrics=baseline_metrics,
@@ -195,7 +189,7 @@ async def _run_single_experiment(  # noqa: PLR0913
             baseline_end=baseline_end.timestamp(),
         )
         await session.commit()
-        
+
         # FAULT PHASE
         await litmus_manager.create_experiment(
             kubeconfig_content=kubeconfig,
@@ -230,16 +224,16 @@ async def _run_single_experiment(  # noqa: PLR0913
         )
 
         if injected_time is None:
-            msg = f"Failed to fetch Chaos Injected Time"
+            msg = "Failed to fetch Chaos Injected Time"
             raise ValueError(msg)
-        
+
         # RECOVERY PHASE
         fault_start = datetime.fromtimestamp(injected_time, tz=UTC)
         fault_end = fault_start + timedelta(seconds=experiment.duration_seconds)
-      
+
         recovery_start = fault_end
         recovery_end = fault_end + timedelta(seconds=EVALUATION_WINDOW_SECONDS)
-        
+
         now = datetime.now(UTC)
         if now < recovery_end:
             await asyncio.sleep((recovery_end - now).total_seconds())
@@ -275,7 +269,7 @@ async def _run_single_experiment(  # noqa: PLR0913
         await session.commit()
         return "Error"
     else:
-        
+
         try:
             await litmus_manager.ensure_cluster_ready(
                 kubeconfig_content=kubeconfig,
@@ -287,7 +281,7 @@ async def _run_single_experiment(  # noqa: PLR0913
             )
         except ClusterNotReadyError as e:
             logger.warning(
-                "Post recovery cluster readiness check failed for experiment=%s: ",
+                "Post recovery cluster readiness check failed for experiment=%s: %s",
                 experiment.id, e
             )
             await chaos_repo.update(
@@ -295,7 +289,7 @@ async def _run_single_experiment(  # noqa: PLR0913
                 status_message=f"Verdict: {verdict} (post-recovery): not_ready: {e.reason}"
             )
             await session.commit()
-        
+
         # Enqueue evaluation via celery by task name to avoid static type issues
         celery_app.send_task("app.tasks.evaluate_experiment", args=[str(experiment.id)])
         logger.info("Enqueued evaluation for experiment=%s", experiment.id)
@@ -323,7 +317,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     vm_url: str | None = None,
 ) -> dict[str, str]:
     """Execute all campaign phases in order."""
-    
+
     litmus_manager = build_litmus_manager()
     progress = JobProgress(job_repo, job)
 

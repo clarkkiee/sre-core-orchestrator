@@ -4,12 +4,19 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from app.infrastructure.chaos.probes import build_probes, estimate_eot_probe_overhead_seconds
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.infrastructure.chaos.discovery import (
     resolve_service_target,
 )
+from app.infrastructure.chaos.naming import TYPE_TO_LITMUS_NAME
+from app.infrastructure.chaos.probes import (
+    build_probes,
+    estimate_eot_probe_overhead_seconds,
+)
+from app.infrastructure.factories import build_litmus_manager
 from app.infrastructure.metrics.client import VictoriaMetricsClient
-from app.models.chaos import ChaosExperiment, ChaosExperimentStatus, ExperimentType
+from app.models.chaos import ChaosExperiment, ChaosExperimentStatus
 from app.models.cluster import Cluster
 from app.models.job import Job, JobStatus
 from app.repositories.chaos import ChaosRepository
@@ -17,11 +24,8 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
-from app.tasks.shared import _make_session_maker
+from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
-from app.infrastructure.factories import build_litmus_manager
-from app.infrastructure.chaos.naming import TYPE_TO_LITMUS_NAME
-from app.tasks.shared import JobProgress
 
 logger = logging.getLogger(__name__)
 
@@ -66,27 +70,16 @@ async def _record_chaos_experiment_failure(
     *,
     prefix: str = "",
 ) -> None:
-    """Record a failure on Chaos Experiment and Job in a fresh DB session."""
-    async with _make_session_maker()() as err_session:
-        c_repo = ChaosRepository(err_session)
-        j_repo = JobRepository(err_session)
-        chaos_experiment = await c_repo.get_by_id(experiment_id)
-        job = await j_repo.get_by_id(job_id)
-        status_msg = f"{prefix}{exc!s}" if prefix else str(exc)
-        if chaos_experiment:
-            await c_repo.update(
-                chaos_experiment,
-                status=ChaosExperimentStatus.FAILED,
-                status_message=status_msg[:500],
+    async def _entity(session: AsyncSession) -> None:
+        repo = ChaosRepository(session)
+        exp = await repo.get_by_id(experiment_id)
+        if exp:
+            msg = f"{prefix}{exc!s}" if prefix else str(exc)
+            await repo.update(
+                exp, status=ChaosExperimentStatus.FAILED,
+                status_message=msg[:500]
             )
-        if job:
-            await j_repo.update(
-                job,
-                status=JobStatus.FAILED,
-                error_message=str(exc)[:1000],
-                completed_at=datetime.now(UTC),
-            )
-        await err_session.commit()
+    await record_job_failure(job_id, exc, update_entity=_entity)
 
 
 async def _run_chaos_experiment_phases(  # noqa: PLR0913

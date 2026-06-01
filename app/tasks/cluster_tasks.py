@@ -4,6 +4,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.infrastructure.factories import build_litmus_manager, build_monitoring_deployer
 from app.infrastructure.kubernetes import KubernetesVerifier
 from app.infrastructure.providers import get_provider
 from app.infrastructure.servicemesh.manager import LinkerdManager
@@ -14,9 +17,8 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
-from app.tasks.shared import _make_session_maker, JobProgress
+from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
-from app.infrastructure.factories import build_litmus_manager, build_monitoring_deployer
 
 logger = logging.getLogger(__name__)
 
@@ -79,27 +81,16 @@ async def _record_failure(
     *,
     prefix: str = "",
 ) -> None:
-    """Record a failure on both Cluster and Job in a fresh DB session."""
-    async with _make_session_maker()() as err_session:
-        c_repo = ClusterRepository(err_session)
-        j_repo = JobRepository(err_session)
-        cluster = await c_repo.get_by_id(cluster_id)
-        job = await j_repo.get_by_id(job_id)
-        status_msg = f"{prefix}{exc!s}" if prefix else str(exc)
-        if cluster:
-            await c_repo.update(
-                cluster,
-                status=ClusterStatus.FAILED,
-                status_message=status_msg[:500],
+     async def _entity(sesion: AsyncSession) -> None:
+        repo = ClusterRepository(sesion)
+        exp = await repo.get_by_id(cluster_id)
+        if exp:
+            msg = f"{prefix}{exc!s}" if prefix else str(exc)
+            await repo.update(
+                exp, status=ClusterStatus.FAILED,
+                status_message=msg[:500]
             )
-        if job:
-            await j_repo.update(
-                job,
-                status=JobStatus.FAILED,
-                error_message=str(exc)[:1000],
-                completed_at=datetime.now(UTC),
-            )
-        await err_session.commit()
+        await record_job_failure(job_id, exc, update_entity=_entity)
 
 
 async def _run_provisioning_phases(
@@ -134,7 +125,7 @@ async def _run_provisioning_phases(
 
     # Phase: DEPLOYING_MONITORING (70%)
     await progress("DEPLOYING_MONITORING", 70)
-    
+
     monitoring_deployer = build_monitoring_deployer()
     vm_url = await monitoring_deployer.deploy(
         result.kubeconfig_content,

@@ -325,7 +325,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             )
             for phase in MetricPhase
         }
-                  
+
         # MRT from blackbox exporter
         probe_scopes_by_phase = {
             phase: partition_by_scope(
@@ -457,6 +457,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
         discovered_services: list[dict[str, Any]] | None = None
         if experiment.campaign_id is not None:
             from sqlalchemy import select
+
             from app.models.campaign import ChaosCampaign
             stmt = select(ChaosCampaign.discovered_services).where(
                 ChaosCampaign.id == experiment.campaign_id
@@ -500,24 +501,24 @@ def _compute_mrt(
     for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
        probe_fault = probe_fault_scopes.get(scope, [])
        probe_recovery = probe_recovery_scopes.get(scope, [])
-       
+
        if not probe_fault and not probe_recovery:
            continue
-       
+
        mrt = compute_mean_recovery_time(
            fault_samples=probe_fault,
            recovery_samples=probe_recovery,
            step_seconds=step_seconds,
        )
-       
+
        row = build_indicator_rows(
            evaluation_id, ISOIndicator.MEAN_RECOVERY_TIME,
            None, scope, mrt, _FV_MEAN_RECOVERY_TIME
        )
-       
+
        if row:
            rows.append(row)
-       
+
 async def _fetch_all_samples(
     query_engine: MetricsQueryEngine,
     sample_repo: RawMetricSampleRepository,
@@ -569,17 +570,17 @@ def _extract_probe_results(experiment: Any) -> list[dict[str, Any]]: # noqa: ANN
         .get("status", {})
         .get("probeStatuses") or []
     )
-    
+
     rows = []
     for ps in probe_status:
         status = ps.get("status", {})
         description = status.get("description", "")
-        
+
         m = _ACTUAL_VALUE_RE.search(description)
         actual_value = m.group(1).strip() if m else None
 
         probe_name = ps.get("name", "")
-        
+
         # Map probe name → indicator for cross-reference dashboards.
         # Informational only — does NOT drive evaluation_indicators rows.
         linked_indicator = None
@@ -604,7 +605,7 @@ def _extract_probe_results(experiment: Any) -> list[dict[str, Any]]: # noqa: ANN
         })
 
     return rows
-    
+
 async def _upsert_probe_results(
     session: Any, # noqa: ANN401
     evaluation_id: uuid.UUID,
@@ -612,7 +613,7 @@ async def _upsert_probe_results(
 ) -> None:
     if not probe_rows:
         return
-    
+
     for row in probe_rows:
         stmt = (
             pg_insert(ProbeResult)
@@ -643,20 +644,20 @@ async def _upsert_probe_results(
             }
         )
         await session.execute(stmt)
-        
+
     await session.flush()
 
 def _derive_evaluation_status(experiment: Any) -> str: # noqa: ANN401
     result = experiment.result or {}
     exp_status = result.get("status", {}).get("experimentStatus", {})
     verdict = exp_status.get("verdict", {})
-    
+
     pct_str = exp_status.get("probeSuccessPercentage")
     try:
         psp = float(pct_str) if pct_str is not None else 0.0
     except (TypeError, ValueError):
         psp = 0.0
-        
+
     if verdict in ("Error", "Stopped"):
         return "FAILED"
     if verdict == "Fail":
@@ -667,7 +668,7 @@ def _derive_evaluation_status(experiment: Any) -> str: # noqa: ANN401
         if psp >= 50.0:
             return "PARTIAL"
         return "FAILED"
-    return "PARTIAL" 
+    return "PARTIAL"
 
 def _compute_availability_for_signal(
     evaluation_id: uuid.UUID,
@@ -744,7 +745,7 @@ def _compute_memory_indicators(
             )
             if row:
                 rows.append(row)
-                
+
 def _compute_success_rate_degradation(
     evaluation_id: uuid.UUID,
     baseline_scopes: dict[MeasurementScope, list[RawMetricSample]],
