@@ -37,8 +37,17 @@ from app.tasks.chaos_tasks import (
 )
 from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BaselineResult:
+    metrics: dict[str, float | None]
+    derived_thresholds: dict[str, Any]
+    start: datetime
+    end: datetime
 
 # ---------------------------------------------------------------------------
 # Celery task entry point
@@ -78,8 +87,36 @@ async def _record_campaign_failure(
             )
     await record_job_failure(job_id, exc, update_entity=_entity)
 
+async def _collect_baseline(
+    experiment: ChaosExperiment,
+    vm_url: str | None
+) -> BaselineResult:
+    start = datetime.now(UTC)
+    logger.info(
+        "Baseline phase: experiment=%s observing for %ds",
+        experiment.id, EVALUATION_WINDOW_SECONDS
+    )
+    await asyncio.sleep(EVALUATION_WINDOW_SECONDS)
+    end = datetime.now(UTC)
 
-async def _run_single_experiment(  # noqa: PLR0913
+    metrics: dict[str, float | None] = {}
+    derived: dict[str, Any] = {}
+    
+    if settings.BASELINE_METRICS_ENABLED and vm_url:
+        vm_client = VictoriaMetricsClient(vm_url)
+        catalog = MetricCatalog.load_from_dir()
+        metrics = await extract_baseline_metrics(
+            vm_client=vm_client, catalog=catalog,
+            baseline_start=start, baseline_end=end,
+            namespace=experiment.target_namespace,
+            target_label=experiment.target_label
+        )
+        derived = derive_thresholds_from_baseline(metrics, settings)
+        logger.info("Baseline metrics derived thresholds for experiment=%s: %s", experiment.id, derived)
+        
+    return BaselineResult(metrics=metrics, derived_thresholds=derived, start=start, end=end)
+
+async def _run_single_experiment(  # noqa: PLR0913,PLR0915
     litmus_manager: LitmusChaosManager,
     chaos_repo: ChaosRepository,
     kubeconfig: str,
@@ -92,10 +129,6 @@ async def _run_single_experiment(  # noqa: PLR0913
     vm_url: str | None = None,
     health_path: str | None = None,
 ) -> str:
-    """Execute one chaos experiment and return the verdict.
-
-    Creates the ChaosEngine, polls for the result, records it, then cleans up.
-    """
     engine_name = experiment.chaos_engine_name
     if not engine_name:
         msg = "chaos_engine_name is missing"
@@ -120,40 +153,7 @@ async def _run_single_experiment(  # noqa: PLR0913
         await session.commit()
 
         # BASELINE PHASE
-        baseline_start = datetime.now(UTC)
-        logger.info(
-            "Baseline phase: experiment=%s observing for %ds",
-            experiment.id, EVALUATION_WINDOW_SECONDS
-        )
-        await asyncio.sleep(EVALUATION_WINDOW_SECONDS)
-        baseline_end = datetime.now(UTC)
-
-        # EXTRACT BASELINE METRICS
-        derived_thresholds: dict[str, Any] = {}
-        baseline_metrics: dict[str, float | None] = {}
-
-        if settings.BASELINE_METRICS_ENABLED and vm_url:
-            vm_client = VictoriaMetricsClient(vm_url)
-            catalog = MetricCatalog.load_from_dir()
-
-            baseline_metrics = await extract_baseline_metrics(
-                baseline_start=baseline_start,
-                baseline_end=baseline_end,
-                catalog=catalog,
-                namespace=experiment.target_namespace,
-                target_label=experiment.target_label,
-                vm_client=vm_client
-            )
-
-            derived_thresholds = derive_thresholds_from_baseline(
-                baseline_metrics=baseline_metrics,
-                settings=settings
-            )
-
-            logger.info(
-                "Baseline derived probe thresholds for experiment=%s: %s",
-                experiment.id, derived_thresholds,
-            )
+        baseline = await _collect_baseline(experiment, vm_url)
 
         # Build probes with derived thresholds
         deployment_repo = DeploymentRepository(session)
@@ -166,7 +166,7 @@ async def _run_single_experiment(  # noqa: PLR0913
         probes_cfg = dict(experiment_configuration.get("probes") or {})
         existing_thresholds = dict(probes_cfg.get("thresholds") or {})
 
-        merged_thresholds = {**derived_thresholds, **existing_thresholds}
+        merged_thresholds = {**baseline.derived_thresholds, **existing_thresholds}
         probes_cfg["thresholds"] = merged_thresholds
         experiment_configuration["probes"] = probes_cfg
 
@@ -187,9 +187,9 @@ async def _run_single_experiment(  # noqa: PLR0913
 
         await chaos_repo.update(
             experiment,
-            baseline_metrics=baseline_metrics,
-            baseline_start=baseline_start.timestamp(),
-            baseline_end=baseline_end.timestamp(),
+            baseline_metrics=baseline.metrics,
+            baseline_start=baseline.start.timestamp(),
+            baseline_end=baseline.end.timestamp(),
         )
         await session.commit()
 

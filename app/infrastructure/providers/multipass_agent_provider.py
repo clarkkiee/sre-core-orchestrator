@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 from app.infrastructure.agent.bootstrap import AgentBootstrap
-from app.infrastructure.agent.client import AgentClient
+from app.infrastructure.agent.client import AgentClient, VMSpec
 from app.infrastructure.agent.exceptions import (
     AgentTaskFailedError,
     AgentUnreachableError,
@@ -134,9 +134,11 @@ class MultipassAgentProvider(ClusterProvider):
             task_id=task_id,
             cluster_name=cluster_name,
             worker_count=worker_count,
-            vm_cpus=sizing["cpus"],
-            vm_memory=sizing["memory"],
-            vm_disk=sizing["disk"],
+            vm=VMSpec(
+                cpus=sizing["cpus"],
+                memory=sizing["memory"],
+                disk=sizing["disk"],
+            ),
             disable_traefik=settings.K3S_DISABLE_TRAEFIK,
         )
 

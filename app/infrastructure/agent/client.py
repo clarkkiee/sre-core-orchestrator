@@ -9,9 +9,17 @@ from typing import Any
 import httpx
 
 from app.infrastructure.agent.exceptions import AgentUnreachableError
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class VMSpec:
+    cpus: int = 2
+    memory: str = "2G"
+    disk: str = "10G"
+    image: str = "22.04"
 
 class AgentClient:
     """HTTP client for communicating with the provisioning agent."""
@@ -59,8 +67,7 @@ class AgentClient:
         resp = await client.get("/health", timeout=3.0)
         resp.raise_for_status()
         return resp.json()
-
-    # ---- Tasks ----
+    
 
     async def submit_provision(
         self,
@@ -68,12 +75,10 @@ class AgentClient:
         task_id: str,
         cluster_name: str,
         worker_count: int = 2,
-        vm_cpus: int = 2,
-        vm_memory: str = "2G",
-        vm_disk: str = "10G",
-        vm_image: str = "22.04",
+        vm: VMSpec | None = None,
         disable_traefik: bool = True,
     ) -> None:
+        vm = vm or VMSpec()
         client = await self._client()
         resp = await client.post(
             "/tasks/provision",
@@ -81,10 +86,10 @@ class AgentClient:
                 "task_id": task_id,
                 "cluster_name": cluster_name,
                 "worker_count": worker_count,
-                "vm_cpus": vm_cpus,
-                "vm_memory": vm_memory,
-                "vm_disk": vm_disk,
-                "vm_image": vm_image,
+                "vm_cpus": vm.cpus,
+                "vm_memory": vm.memory,
+                "vm_disk": vm.disk,
+                "vm_image": vm.image,
                 "disable_traefik": disable_traefik,
             },
         )
