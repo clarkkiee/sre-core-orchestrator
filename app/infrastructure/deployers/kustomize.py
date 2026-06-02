@@ -26,12 +26,12 @@ class KustomizeDeployer(BaseDeployer):
         )
 
     async def verify(self) -> bool:
-        output = await self._run_command(
+        await self._run_command(
             "kubectl",
-            "--wait",
+            "wait",
             "--for=condition=Ready",
             "pods",
-            "--all"
+            "--all",
             "-n",
             self.namespace,
             "--timeout=300s"

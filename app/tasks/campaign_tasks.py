@@ -12,6 +12,7 @@ from app.infrastructure.chaos.exceptions import ClusterNotReadyError
 from app.infrastructure.chaos.manager import LitmusChaosManager
 from app.infrastructure.chaos.naming import LITMUS_NAME_TO_TYPE
 from app.infrastructure.chaos.probes import (
+    ProbeBuildContext,
     build_probes,
     derive_thresholds_from_baseline,
     estimate_eot_probe_overhead_seconds,
@@ -36,7 +37,6 @@ from app.tasks.chaos_tasks import (
 )
 from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
-from app.infrastructure.chaos.probes import ProbeBuildContext
 
 logger = logging.getLogger(__name__)
 

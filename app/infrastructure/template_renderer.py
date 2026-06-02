@@ -24,7 +24,7 @@ class TemplateRenderer:
     def __init__(self, template_dir: Path) -> None:
         self._env = Environment(
             loader=FileSystemLoader(str(template_dir)),
-            autoescape=False,
+            autoescape=False, # noqa: S701
             trim_blocks=True,
             lstrip_blocks=True,
             undefined=StrictUndefined

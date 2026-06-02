@@ -2,7 +2,7 @@ args: "./experiments -name pod-cpu-hog"
 needs_runtime_socket: true
 env:
   TOTAL_CHAOS_DURATION: "120"
-  CPU_CORES: "1"
+  CPU_CORES: "0"
   CPU_LOAD: "100"
   PODS_AFFECTED_PERC: "0"
   SEQUENCE: "parallel"

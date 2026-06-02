@@ -11,6 +11,7 @@ from app.infrastructure.chaos.discovery import (
 )
 from app.infrastructure.chaos.naming import TYPE_TO_LITMUS_NAME
 from app.infrastructure.chaos.probes import (
+    ProbeBuildContext,
     build_probes,
     estimate_eot_probe_overhead_seconds,
 )
@@ -26,7 +27,6 @@ from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
 from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
-from app.infrastructure.chaos.probes import ProbeBuildContext
 
 logger = logging.getLogger(__name__)
 
