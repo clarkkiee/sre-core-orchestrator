@@ -500,6 +500,33 @@ def compute_error_rate_blackbox_grpc(
     }
 
 
+def compute_error_rate_blackbox_tcp(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """ERROR_RATE dari tcp_connect probe_success (untuk service TCP murni, mis. redis).
+
+    Klasifikasi error: probe_success == 0 (koneksi TCP gagal). HTTP/gRPC status
+    tidak berlaku untuk service TCP murni, jadi error rate = fraksi TCP connect gagal.
+    """
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    errors = sum(1 for v in values if v == 0)
+    rate = errors / len(values)
+    return {
+        "value": round(rate, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "error_count": errors,
+            "total_probes": len(values),
+            "classifier": "tcp_connect",
+        },
+    }
+
+
 def compute_success_rate_degradation_blackbox(
     baseline_samples: list[RawMetricSample],
     fault_samples: list[RawMetricSample],

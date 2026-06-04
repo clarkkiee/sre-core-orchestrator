@@ -2,8 +2,8 @@ args: "./experiments -name pod-delete"
 needs_runtime_socket: false
 env:
   TOTAL_CHAOS_DURATION: "120"
-  CHAOS_INTERVAL: "30"
+  CHAOS_INTERVAL: "120"
   FORCE: "true"
-  PODS_AFFECTED_PERC: "0"
+  PODS_AFFECTED_PERC: "33"
   SEQUENCE: "parallel"
   RAMP_TIME: "0"

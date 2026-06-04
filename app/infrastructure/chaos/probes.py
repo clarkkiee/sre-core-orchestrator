@@ -273,7 +273,7 @@ _EOT_PROM_NO_RESTART_CASCADE: dict[str, Any] = {
     "promProbe/inputs": {
         "endpoint": "${prom_url}",
         "query": """
-            sum(increase(kube_pod_container_restarts_total{namespace="${namespace}", pod=~"${target_name}-.*"}[120s]))
+            sum(increase(kube_pod_container_restarts_total{namespace='${namespace}', pod=~'${target_name}-.*'}[120s])) or vector(0)
         """,
         "comparator": {
             "type": "float",

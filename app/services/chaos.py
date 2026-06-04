@@ -1,5 +1,6 @@
 import logging
 import uuid
+from typing import Any
 
 from app.infrastructure.factories import build_litmus_manager
 from app.models.chaos import ChaosExperiment, ChaosExperimentStatus
@@ -129,7 +130,7 @@ class ChaosService:
         return exp
 
     @staticmethod
-    def _experiment_to_fields(experiment: ChaosExperiment) -> dict[str, object]:
+    def _experiment_to_fields(experiment: ChaosExperiment) -> dict[str, Any]:
         return {
             "id": experiment.id,
             "tenant_id": experiment.tenant_id,
