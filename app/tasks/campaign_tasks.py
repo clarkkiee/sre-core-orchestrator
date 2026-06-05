@@ -25,8 +25,6 @@ from app.utils.config import settings
 logger = logging.getLogger(__name__)
 
 # Temporary campaign allowlist for the current runtime cleanup.
-EXPERIMENT_TYPES_TO_RUN = ["pod-memory-hog", "pod-network-loss", "pod-network-latency", "pod-delete", "pod-cpu-hog"]
-
 # ---------------------------------------------------------------------------
 # Celery task entry point
 # ---------------------------------------------------------------------------
@@ -111,7 +109,6 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     experiment_types = [
         name
         for name in experiments.experiment_names()
-        if name in EXPERIMENT_TYPES_TO_RUN
     ]
     total = len(experiment_types) * len(services)
 
@@ -148,9 +145,6 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
         experiment_type_enum = LITMUS_NAME_TO_TYPE[litmus_name]
         
         for service in services:
-            if service['name'] != "redis-cart":
-                continue
-            
             # Check if campaign was stopped between experiments.
             await session.refresh(campaign)
             if campaign.status == CampaignStatus.STOPPED:

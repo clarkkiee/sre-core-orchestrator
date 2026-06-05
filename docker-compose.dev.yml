@@ -16,10 +16,6 @@ services:
       - ENV=development
       - LOG_LEVEL=DEBUG
 
-  db:
-    ports:
-      - "5432:5432"
-
   rabbitmq:
     ports:
       - "5672:5672"

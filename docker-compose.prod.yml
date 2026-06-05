@@ -15,17 +15,6 @@ services:
           memory: 512M
     restart: always
 
-  db:
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 4G
-        reservations:
-          cpus: '0.5'
-          memory: 1G
-    restart: always
-
   rabbitmq:
     deploy:
       resources:
