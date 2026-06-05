@@ -27,6 +27,7 @@ services:
     volumes:
       - ./app:/app/app:cached
       - ./pipeline:/app/pipeline:cached
+      - ./config:/app/config:cached
       - /var/run/docker.sock:/var/run/docker.sock
       - ./docker/ssh:/app/.ssh:ro
     environment:
