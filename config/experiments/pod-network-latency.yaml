@@ -5,7 +5,7 @@ env:
   NETWORK_LATENCY: "2000"
   JITTER: "0"
   NETWORK_INTERFACE: "eth0"
-  PODS_AFFECTED_PERC: "0"
+  PODS_AFFECTED_PERC: "33"
   SEQUENCE: "parallel"
   CONTAINER_RUNTIME: "containerd"
   SOCKET_PATH: "/run/k3s/containerd/containerd.sock"
