@@ -144,12 +144,7 @@ async def _run_campaign_phases(  # noqa: PLR0913, PLR0915
     for litmus_name in experiment_types:
         experiment_type_enum = LITMUS_NAME_TO_TYPE[litmus_name]
         
-        if litmus_name not in ["pod-delete", "pod-network-loss"]:
-            continue
-        
         for service in services:
-            if service['name'] not in ["cartservice", "productcatalogservice"]:
-                continue
             # Check if campaign was stopped between experiments.
             await session.refresh(campaign)
             if campaign.status == CampaignStatus.STOPPED:
