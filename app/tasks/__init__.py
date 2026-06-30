@@ -14,11 +14,9 @@ from app.tasks.cluster_tasks import (
 )
 from app.tasks.deployment_tasks import delete_deployment_task, deploy_application_task
 from app.tasks.evaluation_tasks import evaluate_experiment_task
-from app.tasks.observability_tasks import collect_metrics_task
 
 __all__ = [
     "celery_app",
-    "collect_metrics_task",
     "delete_deployment_task",
     "deploy_application_task",
     "evaluate_experiment_task",

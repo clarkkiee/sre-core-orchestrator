@@ -1,16 +1,25 @@
 """Application configuration settings."""
 
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
     # Application
     ENV: str = "development"
     PROJECT_NAME: str = "chaos-platform"
     VERSION: str = "1.0.0"
     LOG_LEVEL: str = "INFO"
+    CONFIG_DIR: str = str(Path(__file__).resolve().parents[2]/"config")
 
     # Database
     POSTGRES_HOST: str = "db"
@@ -39,21 +48,13 @@ class Settings(BaseSettings):
 
     # Docker / Kind cluster provisioning
     DOCKER_HOST: str | None = None  # For K8s DinD sidecar: "tcp://localhost:2375"
-    KIND_BINARY: str = "/usr/local/bin/kind"
     KUBECTL_BINARY: str = "/usr/local/bin/kubectl"
     KUBECONFIG_DIR: str = "/tmp/kubeconfigs"  # noqa: S108
-    KIND_PORT_RANGE_START: int = 30000
-    KIND_PORT_RANGE_END: int = 32767
-    KIND_PORTS_PER_BLOCK: int = 20
     CLUSTER_DEFAULT_TTL_DAYS: int = 7
     PRIVATE_REGISTRY_URL: str | None = None
-    CLUSTER_PROVIDER: str = "multipass_k3s"  # "kind" | "multipass_k3s"
-
+    CLUSTER_PROVIDER: str = "multipass_k3s"
     # Multipass + k3s settings (used when CLUSTER_PROVIDER=multipass_k3s)
     MULTIPASS_BINARY: str = "/snap/bin/multipass"
-    VM_CPUS: int = 2
-    VM_MEMORY: str = "4G"
-    VM_DISK: str = "10G"
     K3S_DISABLE_TRAEFIK: bool = True
 
     # Provisioning Agent settings
@@ -83,28 +84,14 @@ class Settings(BaseSettings):
     GATEWAY_API_VERSION: str = "v1.4.0"
     LINKERD_INJECT_NAMESPACES: list[str] = ["default"]
 
-    # Monitoring stack images
-    VM_IMAGE: str = "victoriametrics/victoria-metrics:v1.108.1"
-    KSM_IMAGE: str = "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0"
-    VM_NODEPORT: int = 30090
-    BLACKBOX_IMAGE: str = "prom/blackbox-exporter:v0.25.0"
-
     # Deployment / Git settings
     GIT_CLONE_DIR: str = "/tmp/git-clones"  # noqa: S108
 
-    # LitmusChaos
-    LITMUS_VERSION: str = "3.27.0"
-    LITMUS_RUNNER_IMAGE: str = "litmuschaos/go-runner:3.27.0"
-    
     # Cluster Readiness
     CLUSTER_READY_TIMEOUT_S: int = 60
     CLUSTER_READY_INTERVAL_S: int = 5
     CLUSTER_READY_REQUIRE_NO_ACTIVE_ENGINE: bool = True
 
-    # Litmus Probe defaults (global fallback for SLO thresholds).
-    # Resolution order: experiment.configuration["probes"]["thresholds"]
-    #               → deployment.probe_thresholds
-    #               → these PROBE_DEFAULT_* settings.
     PROBE_DEFAULT_SUCCESS_RATE_SLO: float = 0.95
     PROBE_DEFAULT_DEGRADED_SUCCESS_RATE_SLO: float = 0.80
     PROBE_DEFAULT_P99_RECOVERY_RATIO: float = 1.2
@@ -160,11 +147,6 @@ class Settings(BaseSettings):
             f"amqp://{self.RABBITMQ_USER}:{self.RABBITMQ_PASSWORD}"
             f"@{self.RABBITMQ_HOST}:{self.RABBITMQ_PORT}//"
         )
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"
 
 
 settings = Settings()

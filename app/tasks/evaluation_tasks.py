@@ -52,6 +52,7 @@ from app.services.evaluation import (
     compute_error_rate,
     compute_error_rate_blackbox_grpc,
     compute_error_rate_blackbox_http,
+    compute_error_rate_blackbox_tcp,
     compute_latency_p95_degradation,
     compute_latency_p95_degradation_blackbox,
     compute_latency_p99_degradation,
@@ -99,6 +100,10 @@ _AUX_SIGNAL_NAMES: list[str] = [
 _MEMORY_SIGNAL_NAMES: list[str] = [
     "container_memory_working_set_bytes",
     "kube_pod_container_restarts_total",
+]
+
+_RECOVERY_SIGNAL_NAMES: list[str] = [
+    "kube_workload_ready_replicas",
 ]
 
 # Blackbox-sourced signals fetched in parallel for additive evaluation rows.
@@ -271,6 +276,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             + _LINKERD_SUCCESS_LATENCY_SIGNALS
             + _MEMORY_SIGNAL_NAMES
             + _BLACKBOX_SIGNAL_NAMES
+            + _RECOVERY_SIGNAL_NAMES
         )
         all_samples = await _fetch_all_samples(
             query_engine=query_engine,
@@ -325,7 +331,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
             )
             for phase in MetricPhase
         }
-                  
+
         # MRT from blackbox exporter
         probe_scopes_by_phase = {
             phase: partition_by_scope(
@@ -457,6 +463,7 @@ async def _evaluate_experiment(experiment_id: uuid.UUID) -> dict[str, Any]:
         discovered_services: list[dict[str, Any]] | None = None
         if experiment.campaign_id is not None:
             from sqlalchemy import select
+
             from app.models.campaign import ChaosCampaign
             stmt = select(ChaosCampaign.discovered_services).where(
                 ChaosCampaign.id == experiment.campaign_id
@@ -500,24 +507,24 @@ def _compute_mrt(
     for scope in (MeasurementScope.TARGET, MeasurementScope.PEER):
        probe_fault = probe_fault_scopes.get(scope, [])
        probe_recovery = probe_recovery_scopes.get(scope, [])
-       
+
        if not probe_fault and not probe_recovery:
            continue
-       
+
        mrt = compute_mean_recovery_time(
            fault_samples=probe_fault,
            recovery_samples=probe_recovery,
            step_seconds=step_seconds,
        )
-       
+
        row = build_indicator_rows(
            evaluation_id, ISOIndicator.MEAN_RECOVERY_TIME,
            None, scope, mrt, _FV_MEAN_RECOVERY_TIME
        )
-       
+
        if row:
            rows.append(row)
-       
+
 async def _fetch_all_samples(
     query_engine: MetricsQueryEngine,
     sample_repo: RawMetricSampleRepository,
@@ -569,17 +576,17 @@ def _extract_probe_results(experiment: Any) -> list[dict[str, Any]]: # noqa: ANN
         .get("status", {})
         .get("probeStatuses") or []
     )
-    
+
     rows = []
     for ps in probe_status:
         status = ps.get("status", {})
         description = status.get("description", "")
-        
+
         m = _ACTUAL_VALUE_RE.search(description)
         actual_value = m.group(1).strip() if m else None
 
         probe_name = ps.get("name", "")
-        
+
         # Map probe name → indicator for cross-reference dashboards.
         # Informational only — does NOT drive evaluation_indicators rows.
         linked_indicator = None
@@ -604,7 +611,7 @@ def _extract_probe_results(experiment: Any) -> list[dict[str, Any]]: # noqa: ANN
         })
 
     return rows
-    
+
 async def _upsert_probe_results(
     session: Any, # noqa: ANN401
     evaluation_id: uuid.UUID,
@@ -612,7 +619,7 @@ async def _upsert_probe_results(
 ) -> None:
     if not probe_rows:
         return
-    
+
     for row in probe_rows:
         stmt = (
             pg_insert(ProbeResult)
@@ -643,20 +650,20 @@ async def _upsert_probe_results(
             }
         )
         await session.execute(stmt)
-        
+
     await session.flush()
 
 def _derive_evaluation_status(experiment: Any) -> str: # noqa: ANN401
     result = experiment.result or {}
     exp_status = result.get("status", {}).get("experimentStatus", {})
     verdict = exp_status.get("verdict", {})
-    
+
     pct_str = exp_status.get("probeSuccessPercentage")
     try:
         psp = float(pct_str) if pct_str is not None else 0.0
     except (TypeError, ValueError):
         psp = 0.0
-        
+
     if verdict in ("Error", "Stopped"):
         return "FAILED"
     if verdict == "Fail":
@@ -667,7 +674,7 @@ def _derive_evaluation_status(experiment: Any) -> str: # noqa: ANN401
         if psp >= 50.0:
             return "PARTIAL"
         return "FAILED"
-    return "PARTIAL" 
+    return "PARTIAL"
 
 def _compute_availability_for_signal(
     evaluation_id: uuid.UUID,
@@ -744,7 +751,7 @@ def _compute_memory_indicators(
             )
             if row:
                 rows.append(row)
-                
+
 def _compute_success_rate_degradation(
     evaluation_id: uuid.UUID,
     baseline_scopes: dict[MeasurementScope, list[RawMetricSample]],
@@ -829,11 +836,20 @@ def _compute_blackbox_indicators(
     """
     protocol = _resolve_service_protocol(discovered_services, target_label)
 
+    is_tcp = protocol == "tcp"
     if protocol == "grpc":
         duration_metric = "probe_duration_seconds_grpc"
         status_metric = "probe_grpc_status_code"
         success_metric = "probe_success_grpc"
         error_compute_fn = compute_error_rate_blackbox_grpc
+    elif is_tcp:
+        # Raw TCP service (e.g. redis): HTTP/gRPC status is meaningless. Error
+        # rate comes from the tcp_connect probe_success series (error = connect
+        # failed). Reuse probe_success as the status source; no latency rows.
+        duration_metric = "probe_success"
+        status_metric = "probe_success"
+        success_metric = "probe_success"
+        error_compute_fn = compute_error_rate_blackbox_tcp
     else:
         duration_metric = "probe_duration_seconds_http"
         status_metric = "probe_http_status_code"
@@ -889,21 +905,24 @@ def _compute_blackbox_indicators(
             duration_samples = duration_scopes_by_phase[phase].get(scope, [])
             status_samples = status_scopes_by_phase[phase].get(scope, [])
 
-            p95_result = compute_response_time_p95_blackbox(duration_samples)
-            row = build_indicator_rows(
-                evaluation_id, ISOIndicator.RESPONSE_TIME_P95,
-                phase, scope, p95_result, _FV_RESPONSE_TIME_P95_BLACKBOX,
-            )
-            if row:
-                rows.append(row)
+            # Latency rows are not meaningful for raw TCP (no HTTP/gRPC timing);
+            # for protocol=tcp duration_samples is the probe_success series.
+            if not is_tcp:
+                p95_result = compute_response_time_p95_blackbox(duration_samples)
+                row = build_indicator_rows(
+                    evaluation_id, ISOIndicator.RESPONSE_TIME_P95,
+                    phase, scope, p95_result, _FV_RESPONSE_TIME_P95_BLACKBOX,
+                )
+                if row:
+                    rows.append(row)
 
-            p99_result = compute_response_time_p99_blackbox(duration_samples)
-            row = build_indicator_rows(
-                evaluation_id, ISOIndicator.RESPONSE_TIME_P99,
-                phase, scope, p99_result, _FV_RESPONSE_TIME_P99_BLACKBOX,
-            )
-            if row:
-                rows.append(row)
+                p99_result = compute_response_time_p99_blackbox(duration_samples)
+                row = build_indicator_rows(
+                    evaluation_id, ISOIndicator.RESPONSE_TIME_P99,
+                    phase, scope, p99_result, _FV_RESPONSE_TIME_P99_BLACKBOX,
+                )
+                if row:
+                    rows.append(row)
 
             er_result = error_compute_fn(status_samples)
             row = build_indicator_rows(
@@ -945,24 +964,26 @@ def _compute_blackbox_indicators(
         if row:
             rows.append(row)
 
-        lat_baseline = duration_scopes_by_phase[MetricPhase.BASELINE].get(scope, [])
-        lat_fault = duration_scopes_by_phase[MetricPhase.FAULT].get(scope, [])
+        # Latency degradation is not meaningful for raw TCP services.
+        if not is_tcp:
+            lat_baseline = duration_scopes_by_phase[MetricPhase.BASELINE].get(scope, [])
+            lat_fault = duration_scopes_by_phase[MetricPhase.FAULT].get(scope, [])
 
-        p95_deg_result = compute_latency_p95_degradation_blackbox(lat_baseline, lat_fault)
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.LATENCY_P95_DEGRADATION,
-            None, scope, p95_deg_result, _FV_LATENCY_P95_DEGRADATION_BLACKBOX,
-        )
-        if row:
-            rows.append(row)
+            p95_deg_result = compute_latency_p95_degradation_blackbox(lat_baseline, lat_fault)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.LATENCY_P95_DEGRADATION,
+                None, scope, p95_deg_result, _FV_LATENCY_P95_DEGRADATION_BLACKBOX,
+            )
+            if row:
+                rows.append(row)
 
-        p99_deg_result = compute_latency_p99_degradation_blackbox(lat_baseline, lat_fault)
-        row = build_indicator_rows(
-            evaluation_id, ISOIndicator.LATENCY_P99_DEGRADATION,
-            None, scope, p99_deg_result, _FV_LATENCY_P99_DEGRADATION_BLACKBOX,
-        )
-        if row:
-            rows.append(row)
+            p99_deg_result = compute_latency_p99_degradation_blackbox(lat_baseline, lat_fault)
+            row = build_indicator_rows(
+                evaluation_id, ISOIndicator.LATENCY_P99_DEGRADATION,
+                None, scope, p99_deg_result, _FV_LATENCY_P99_DEGRADATION_BLACKBOX,
+            )
+            if row:
+                rows.append(row)
 
         # Processing-phase degradation (SNR-isolated)
         if proc_scopes_by_phase is not None:

@@ -2,13 +2,9 @@
 
 import logging
 import statistics
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any
 
-from app.infrastructure.metrics.client import VictoriaMetricsClient
-from app.models.chaos import ChaosExperiment
-from app.infrastructure.metrics.catalog import MetricCatalog
-from app.infrastructure.metrics.query_engine import parse_range_response
 from app.models.evaluation_indicator import (
     ISOIndicator,
     MeasurementScope,
@@ -51,151 +47,6 @@ _FV_RESPONSE_TIME_P99_LINKERD_SUCCESS      = "iso25023.ptb2g.p99.linkerd.success
 _FV_LATENCY_P95_DEG_LINKERD_SUCCESS        = "iso25010.ft.lat_p95_ratio.linkerd.success.v1"
 _FV_LATENCY_P99_DEG_LINKERD_SUCCESS        = "iso25010.ft.lat_p99_ratio.linkerd.success.v1"
 
-async def extract_baseline_metrics(
-    vm_client: VictoriaMetricsClient,
-    catalog: MetricCatalog,
-    namespace: str,
-    target_label: str,
-    baseline_start: datetime,
-    baseline_end: datetime,
-) -> dict[str, float | None]:
-    
-    metric_to_key = {
-        "linkerd_response_latency_p99_ms": "baseline_p99_ms",
-        "linkerd_response_latency_p95_ms": "baseline_p95_ms",
-        "linkerd_success_rate": "baseline_success_rate",
-        "linkerd_error_rate": "baseline_error_rate",
-    }
-    
-    target_name = (
-        target_label.split("=", 1)[1].strip()
-        if "=" in target_label else target_label
-    )
-    
-    params = {"ns": namespace, "window": "30s"}
-    result: dict[str, float | None] = {}
-    
-    for metric_name, key in metric_to_key.items():
-
-        try:
-            definition = catalog.get(metric_name)
-        except KeyError as e:
-            logger.warning("Baseline metric not in catalog")
-            result[key] = None
-            continue
-        
-        promql = definition.render(params)
-        try:
-            resp = await vm_client.range_query(
-                promql=promql,
-                start=baseline_start,
-                end=baseline_end,
-                step=definition.default_step
-            )
-        except Exception as e:
-            logger.warning(
-                "Baseline metric query failed for %s: %s",
-                metric_name, e
-            )
-            result[key] = None
-            continue
-        
-        values: list[float] = []
-        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
-            if labels.get("workload") and labels["workload"] != target_name:
-                continue
-            values.append(value)
-            
-        result[key] = (sum(values) / len(values)) if values else None
-        
-    return result
-
-
-class FaultWindowResolutionError(Exception):
-    pass
-
-class PhaseWindows:
-    __slots__ = (
-        "baseline_end",
-        "baseline_start",
-        "fault_end",
-        "fault_start",
-        "recovery_end",
-        "recovery_start",
-    )
-
-    def __init__(
-        self,
-        fault_start: datetime,
-        fault_end: datetime,
-    ) -> None:
-        delta = timedelta(seconds=EVALUATION_WINDOW_SECONDS)
-        self.fault_start = fault_start
-        self.fault_end = fault_end
-        self.baseline_start = fault_start - delta
-        self.baseline_end = fault_start
-        self.recovery_start = fault_end
-        self.recovery_end = fault_end + delta
-
-
-async def resolve_fault_window(
-    experiment: ChaosExperiment,
-    vm_client: VictoriaMetricsClient,
-) -> PhaseWindows:
-    """Resolve the authoritative fault window for an experiment.
-
-    Primary source: experiment.chaos_injected_time — captured during experiment
-    execution while the chaos-exporter gauge still pointed at this engine, so
-    there is no post-hoc gauge-overwrite race.
-
-    Fallback: query VM with last_over_time[5m] at completed_at, for experiments
-    that ran before the eager-capture was deployed.
-
-    fault_start = chaos_injected_time (precise injection moment)
-    fault_end   = fault_start + duration_seconds (avoids exporter end_time=0 bug)
-
-    Raises FaultWindowResolutionError if neither source yields a valid timestamp.
-    """
-    engine_name = experiment.chaos_engine_name
-    if not engine_name:
-        msg = f"Experiment {experiment.id} has no chaos_engine_name"
-        raise FaultWindowResolutionError(msg)
-
-    injected_unix: float | None = None
-    source: str = "unknown"
-
-    if experiment.chaos_injected_time and experiment.chaos_injected_time > 0:
-        injected_unix = experiment.chaos_injected_time
-        source = "db"
-    else:
-        # Fallback: query VM at completed_at using last_over_time to catch the
-        # last scraped value for this engine before the exporter moved on.
-        query_end = experiment.completed_at or datetime.now(UTC)
-        promql = (
-            f'last_over_time('
-            f'litmuschaos_experiment_chaos_injected_time'
-            f'{{chaosengine_name="{engine_name}"}}[5m])'
-        )
-        resp = await vm_client.instant_query(promql, at=query_end)
-        injected_unix = vm_client.extract_scalar(resp)
-        source = "vm_fallback"
-
-    if injected_unix is None or injected_unix == 0:
-        msg = (
-            f"chaos_injected_time not found for engine={engine_name} "
-            f"(experiment={experiment.id}). "
-            "Ensure chaos-exporter is deployed and scraping."
-        )
-        raise FaultWindowResolutionError(msg)
-
-    fault_start = datetime.fromtimestamp(injected_unix, tz=UTC)
-    fault_end = fault_start + timedelta(seconds=experiment.duration_seconds)
-
-    logger.info(
-        "Resolved fault window for experiment=%s (source=%s): %s → %s",
-        experiment.id, source, fault_start, fault_end,
-    )
-    return PhaseWindows(fault_start=fault_start, fault_end=fault_end)
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +72,6 @@ def _detect_episodes(
         episodes.append((ep_start, samples[-1].timestamp))
 
     return episodes
-
 
 def compute_system_availability(
     samples: list[RawMetricSample],
@@ -252,12 +102,12 @@ def compute_mean_recovery_time(
     recovery_samples: list[RawMetricSample],
     step_seconds: float = 5.0
 ) -> dict[str, Any]:
-    
+
     all_samples = sorted(
         [s for s in (fault_samples + recovery_samples) if s.value is not None],
         key=lambda s: s.timestamp
     )
-    
+
     if not all_samples:
         return {
             "value": None,
@@ -265,7 +115,7 @@ def compute_mean_recovery_time(
             "episode_count": 0,
             "extra": None,
         }
-        
+
     episodes: list[tuple[datetime, datetime]] = []
     ep_start: datetime | None = None
     ep_last: datetime | None = None
@@ -276,17 +126,16 @@ def compute_mean_recovery_time(
             if ep_start is None:
                 ep_start = s.timestamp
             ep_last = s.timestamp
-        else:
-            if ep_start is not None and ep_last is not None:
-                episodes.append((ep_start, ep_last))
-                ep_start = None
-                ep_last = None
-                
+        elif ep_start is not None and ep_last is not None:
+            episodes.append((ep_start, ep_last))
+            ep_start = None
+            ep_last = None
+
     # jika episode kegagalan masih terbuka hingga akhir window
     incomplete = ep_start is not None and ep_last is not None
     if incomplete:
         episodes.append((ep_start, ep_last))  # type: ignore
-        
+
     if not episodes:
         return {
             "value": 0.0,
@@ -297,50 +146,29 @@ def compute_mean_recovery_time(
                 "source": "probe_success"
             }
         }
-    
+
     durations = [
         (end - start).total_seconds() + step_seconds
         for start, end in episodes
     ]
-    
+
     mrt = sum(durations) / len(durations)
-    
+
     extra: dict[str, Any] = {
         "source": "probe_success",
         "episode_durations_s": [round(d, 3) for d in durations],
         "step_seconds": step_seconds,
     }
-    
+
     if incomplete:
         extra["note"] = "incomplete_recovery"
-    
+
     return {
         "value": round(mrt, 3),
         "sample_count": len(all_samples),
         "episode_count": len(episodes),
         "extra": extra
     }
-
-def _detect_episodes_ratio(
-    samples: list[RawMetricSample],
-    threshold: float = 0.95,
-) -> list[tuple[datetime, datetime]]:
-    episodes: list[tuple[datetime, datetime]] = []
-    ep_start: datetime | None = None
-
-    for s in samples:
-        is_degraded = s.value is not None and s.value < threshold
-
-        if is_degraded and ep_start is None:
-            ep_start = s.timestamp
-        elif not is_degraded and ep_start is not None:
-            episodes.append((ep_start, s.timestamp))
-            ep_start = None
-
-    if ep_start is not None and samples:
-        episodes.append((ep_start, samples[-1].timestamp))
-
-    return episodes
 
 def _compute_response_latency(
     samples: list[RawMetricSample],
@@ -370,7 +198,6 @@ def _compute_response_latency(
             "peak_ms": round(peak_lat, 3),
         },
     }
-
 
 def compute_response_time_p95(
     samples: list[RawMetricSample]
@@ -544,14 +371,12 @@ def _compute_latency_degradation(
         },
     }
 
-
 def compute_latency_p95_degradation(
     baseline_samples: list[RawMetricSample],
     fault_samples: list[RawMetricSample],
 ) -> dict[str, Any]:
     """(P95_fault - P95_baseline) / P95_baseline dari linkerd_response_latency_p95_ms"""
     return _compute_latency_degradation(baseline_samples, fault_samples, "p95")
-
 
 def compute_latency_p99_degradation(
     baseline_samples: list[RawMetricSample],
@@ -675,6 +500,33 @@ def compute_error_rate_blackbox_grpc(
     }
 
 
+def compute_error_rate_blackbox_tcp(
+    samples: list[RawMetricSample],
+) -> dict[str, Any]:
+    """ERROR_RATE dari tcp_connect probe_success (untuk service TCP murni, mis. redis).
+
+    Klasifikasi error: probe_success == 0 (koneksi TCP gagal). HTTP/gRPC status
+    tidak berlaku untuk service TCP murni, jadi error rate = fraksi TCP connect gagal.
+    """
+    if not samples:
+        return {"value": None, "sample_count": 0, "episode_count": 0, "extra": None}
+    values = [s.value for s in samples if s.value is not None]
+    if not values:
+        return {"value": None, "sample_count": len(samples), "episode_count": 0, "extra": None}
+    errors = sum(1 for v in values if v == 0)
+    rate = errors / len(values)
+    return {
+        "value": round(rate, 6),
+        "sample_count": len(samples),
+        "episode_count": 0,
+        "extra": {
+            "error_count": errors,
+            "total_probes": len(values),
+            "classifier": "tcp_connect",
+        },
+    }
+
+
 def compute_success_rate_degradation_blackbox(
     baseline_samples: list[RawMetricSample],
     fault_samples: list[RawMetricSample],
@@ -772,99 +624,6 @@ def compute_latency_p99_degradation_blackbox(
     )
 
 
-async def extract_baseline_metrics_blackbox(
-    vm_client: VictoriaMetricsClient,
-    catalog: MetricCatalog,
-    namespace: str,
-    target_label: str,
-    baseline_start: datetime,
-    baseline_end: datetime,
-    *,
-    service_protocol: str = "http",
-) -> dict[str, float | None]:
-    """Pull blackbox-sourced baseline values (parallel to extract_baseline_metrics).
-
-    service_protocol: "http" or "grpc" — picks the right probe job.
-    Returns keys suffixed with `_blackbox` so they coexist with Linkerd keys
-    in the same baseline_metrics JSON column.
-    """
-    if service_protocol == "grpc":
-        duration_metric = "probe_duration_seconds_grpc"
-        success_metric = "probe_success_grpc"
-        status_metric = "probe_grpc_status_code"
-    else:
-        duration_metric = "probe_duration_seconds_http"
-        success_metric = "probe_success_htttp"
-        status_metric = "probe_http_status_code"
-
-    target_name = (
-        target_label.split("=", 1)[1].strip()
-        if "=" in target_label
-        else target_label
-    )
-    params = {"ns": namespace, "window": "30s"}
-    result: dict[str, float | None] = {}
-
-    async def _query_mean(metric_name: str) -> float | None:
-        try:
-            definition = catalog.get(metric_name)
-        except KeyError:
-            logger.warning("Baseline blackbox metric not in catalog: %s", metric_name)
-            return None
-        promql = definition.render(params)
-        try:
-            resp = await vm_client.range_query(
-                promql=promql,
-                start=baseline_start,
-                end=baseline_end,
-                step=definition.default_step,
-            )
-        except Exception as exc:
-            logger.warning("Baseline blackbox query failed for %s: %s", metric_name, exc)
-            return None
-        values: list[float] = []
-        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
-            if labels.get("service") and labels["service"] != target_name:
-                continue
-            values.append(value)
-        return (sum(values) / len(values)) if values else None
-
-    async def _query_percentile(metric_name: str, percentile: float) -> float | None:
-        try:
-            definition = catalog.get(metric_name)
-        except KeyError:
-            return None
-        promql = definition.render(params)
-        try:
-            resp = await vm_client.range_query(
-                promql=promql,
-                start=baseline_start,
-                end=baseline_end,
-                step=definition.default_step,
-            )
-        except Exception as exc:
-            logger.warning("Baseline blackbox query failed for %s: %s", metric_name, exc)
-            return None
-        values: list[float] = []
-        for labels, _ts, value in parse_range_response(resp, definition.labels_to_keep):
-            if labels.get("service") and labels["service"] != target_name:
-                continue
-            values.append(value)
-        if not values:
-            return None
-        if len(values) == 1:
-            return values[0]
-        idx = max(0, min(98, int(round(percentile * 100)) - 1))
-        return statistics.quantiles(values, n=100, method="inclusive")[idx]
-
-    result["baseline_success_rate_blackbox"] = await _query_mean(success_metric)
-    result["baseline_error_rate_blackbox"] = await _query_mean(status_metric)
-    result["baseline_p95_seconds_blackbox"] = await _query_percentile(duration_metric, 0.95)
-    result["baseline_p99_seconds_blackbox"] = await _query_percentile(duration_metric, 0.99)
-
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Scope partitioning
 # ---------------------------------------------------------------------------
@@ -920,14 +679,14 @@ def _infer_step(samples: list[RawMetricSample], default: float = 5.0) -> float:
     """Estimate the step interval in seconds from consecutive timestamps."""
     if len(samples) < 2:
         return default
-    
+
     from collections import defaultdict
     by_series = defaultdict(list)
-    
+
     for s in samples:
         key = frozenset(s.labels.items()) if s.labels else frozenset()
         by_series[key].append(s.timestamp)
-        
+
     series_steps = []
     for ts_list in by_series.values():
         if len(ts_list) < 2:
@@ -939,7 +698,7 @@ def _infer_step(samples: list[RawMetricSample], default: float = 5.0) -> float:
         if deltas:
             series_steps.append(statistics.median(deltas))
     return statistics.median(series_steps) if series_steps else default
-    
+
 
 def window_seconds(start: datetime, end: datetime) -> float:
     return (end - start).total_seconds()
@@ -962,7 +721,7 @@ def build_indicator_rows(
     return {
         "evaluation_id": evaluation_id,
         "indicator": indicator,
-        "sub_characteristic": derive_sub_characteristic(indicator, phase_value), 
+        "sub_characteristic": derive_sub_characteristic(indicator, phase_value),
         "phase": phase,
         "scope": scope,
         "value": result["value"],

@@ -4,9 +4,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from app.infrastructure.chaos.manager import LitmusChaosManager
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.infrastructure.factories import build_litmus_manager, build_monitoring_deployer
 from app.infrastructure.kubernetes import KubernetesVerifier
-from app.infrastructure.metrics.deployer import MonitoringStackDeployer
 from app.infrastructure.providers import get_provider
 from app.infrastructure.servicemesh.manager import LinkerdManager
 from app.models.cluster import ClusterStatus
@@ -16,7 +17,7 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.tasks.celery_config import celery_app
-from app.tasks.shared import _make_session_maker
+from app.tasks.shared import JobProgress, _make_session_maker, record_job_failure
 from app.utils.config import settings
 
 logger = logging.getLogger(__name__)
@@ -80,27 +81,16 @@ async def _record_failure(
     *,
     prefix: str = "",
 ) -> None:
-    """Record a failure on both Cluster and Job in a fresh DB session."""
-    async with _make_session_maker()() as err_session:
-        c_repo = ClusterRepository(err_session)
-        j_repo = JobRepository(err_session)
-        cluster = await c_repo.get_by_id(cluster_id)
-        job = await j_repo.get_by_id(job_id)
-        status_msg = f"{prefix}{exc!s}" if prefix else str(exc)
-        if cluster:
-            await c_repo.update(
-                cluster,
-                status=ClusterStatus.FAILED,
-                status_message=status_msg[:500],
+     async def _entity(sesion: AsyncSession) -> None:
+        repo = ClusterRepository(sesion)
+        exp = await repo.get_by_id(cluster_id)
+        if exp:
+            msg = f"{prefix}{exc!s}" if prefix else str(exc)
+            await repo.update(
+                exp, status=ClusterStatus.FAILED,
+                status_message=msg[:500]
             )
-        if job:
-            await j_repo.update(
-                job,
-                status=JobStatus.FAILED,
-                error_message=str(exc)[:1000],
-                completed_at=datetime.now(UTC),
-            )
-        await err_session.commit()
+        await record_job_failure(job_id, exc, update_entity=_entity)
 
 
 async def _run_provisioning_phases(
@@ -124,25 +114,19 @@ async def _run_provisioning_phases(
     )
     await session.commit()
 
-    async def on_progress(phase: str, pct: int) -> None:
-        await job_repo.update(job, current_phase=phase, progress_percentage=pct)
-        await session.commit()
+    progress = JobProgress(job_repo, job)
 
     # Provider handles infra-specific phases (5-55%)
-    result = await provider.provision(cluster.kind_name, config, on_progress)
+    result = await provider.provision(cluster.kind_name, config, progress)
 
     # Phase: VERIFYING (60%)
-    await on_progress("VERIFYING", 60)
+    await progress("VERIFYING", 60)
     await verifier.verify_cluster_ready(result.kubeconfig_content)
 
     # Phase: DEPLOYING_MONITORING (70%)
-    await on_progress("DEPLOYING_MONITORING", 70)
-    monitoring_deployer = MonitoringStackDeployer(
-        vm_image=settings.VM_IMAGE,
-        ksm_image=settings.KSM_IMAGE,
-        vm_nodeport=settings.VM_NODEPORT,
-        bbe_image=settings.BLACKBOX_IMAGE,
-    )
+    await progress("DEPLOYING_MONITORING", 70)
+
+    monitoring_deployer = build_monitoring_deployer()
     vm_url = await monitoring_deployer.deploy(
         result.kubeconfig_content,
         result.control_plane_ip,
@@ -151,7 +135,7 @@ async def _run_provisioning_phases(
     await session.commit()
 
     # Phase: DEPLOYING_LINKERD (80%)
-    await on_progress("DEPLOYING_LINKERD", 80)
+    await progress("DEPLOYING_LINKERD", 80)
     linkerd_manager = LinkerdManager(
         gateway_api_version=settings.GATEWAY_API_VERSION,
         kubectl_binary=settings.KUBECTL_BINARY,
@@ -160,12 +144,8 @@ async def _run_provisioning_phases(
     await linkerd_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 
     # Phase: DEPLOYING_LITMUS (85%)
-    await on_progress("DEPLOYING_LITMUS", 85)
-    litmus_manager = LitmusChaosManager(
-        kubectl_binary=settings.KUBECTL_BINARY,
-        litmus_version=settings.LITMUS_VERSION,
-        litmus_runner_image=settings.LITMUS_RUNNER_IMAGE,
-    )
+    await progress("DEPLOYING_LITMUS", 85)
+    litmus_manager = build_litmus_manager()
     await litmus_manager.deploy(kubeconfig_content=result.kubeconfig_content)
 
     # Phase: COMPLETE (100%)

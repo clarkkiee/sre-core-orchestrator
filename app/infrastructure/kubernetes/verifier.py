@@ -2,10 +2,10 @@
 
 import asyncio
 import logging
-import tempfile
 
-from kubernetes_asyncio import client, config
-from kubernetes_asyncio.client import ApiClient, Configuration
+from kubernetes_asyncio import client
+
+from app.infrastructure.kubernetes.client import k8s_client
 
 logger = logging.getLogger(__name__)
 
@@ -51,25 +51,8 @@ class KubernetesVerifier:
 
     async def _check_nodes_ready(self, kubeconfig_content: str) -> bool:
         # kubernetes-asyncio requires a file path, so write to a temp file
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".yaml",
-            delete=True,
-        ) as tmp:
-            tmp.write(kubeconfig_content)
-            tmp.flush()
-            await config.load_kube_config(config_file=tmp.name)
-
-        # Disable SSL verification at the client level because the Kind API
-        # server certificate is issued for 127.0.0.1/localhost, but we connect
-        # via the container's Docker network IP.
-        configuration = Configuration.get_default_copy()
-        configuration.verify_ssl = False
-        configuration.ssl_ca_cert = None
-
-        api_client = ApiClient(configuration=configuration)
-        v1 = client.CoreV1Api(api_client=api_client)
-        try:
+        async with k8s_client(kubeconfig_content) as api_client:
+            v1 = client.CoreV1Api(api_client=api_client)
             node_list = await v1.list_node()
             if not node_list.items:
                 return False
@@ -85,5 +68,3 @@ class KubernetesVerifier:
                     )
                     return False
             return True
-        finally:
-            await api_client.close()

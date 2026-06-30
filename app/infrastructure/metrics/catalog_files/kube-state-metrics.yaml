@@ -21,3 +21,19 @@ metrics:
     default_step: "5s"
     labels_to_keep: [namespace, workload]
     scope_label_key: "workload"
+  - name: kube_workload_ready_replicas
+    source: kube_state_metrics
+    description: >
+      Count of READY pods per workload
+    promql_template: >
+      sum(
+        label_replace(
+          kube_pod_status_ready{namespace="$ns", condition="true"},
+          "workload", "$$1", "pod", "^(.+)-[^-]+-[^-]+$$"
+        )
+      ) by (workload)
+    unit: count
+    value_type: gauge
+    default_step: "5s"
+    labels_to_keep: [namespace, workload]
+    scope_label_key: "workload"

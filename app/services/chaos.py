@@ -1,5 +1,8 @@
+import logging
 import uuid
+from typing import Any
 
+from app.infrastructure.factories import build_litmus_manager
 from app.models.chaos import ChaosExperiment, ChaosExperimentStatus
 from app.models.job import Job, JobStatus, JobType
 from app.repositories.chaos import ChaosRepository
@@ -13,6 +16,7 @@ from app.schemas.chaos import (
 )
 from app.tasks.chaos_tasks import run_chaos_experiment_task
 
+logger = logging.getLogger(__name__)
 
 class ChaosService:
     def __init__(
@@ -107,12 +111,26 @@ class ChaosService:
         ):
             return exp
 
-        # TODO: Revoke celery task and delete ChaosEngine CR
+        cluster = await self.cluster_repository.get_by_id(exp.cluster_id)
+        if cluster and cluster.kubeconfig and exp.chaos_engine_name:
+            try:
+                manager = build_litmus_manager()
+                await manager.delete_experiment(
+                    cluster.kubeconfig,
+                    exp.target_namespace,
+                    exp.chaos_engine_name,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to delete ChaosEngine %s for experiment %s",
+                    exp.chaos_engine_name, experiment_id, exc_info=True
+                )
+
         await self.chaos_repository.update(exp, status=ChaosExperimentStatus.STOPPED)
         return exp
 
     @staticmethod
-    def _experiment_to_fields(experiment: ChaosExperiment) -> dict[str, object]:
+    def _experiment_to_fields(experiment: ChaosExperiment) -> dict[str, Any]:
         return {
             "id": experiment.id,
             "tenant_id": experiment.tenant_id,

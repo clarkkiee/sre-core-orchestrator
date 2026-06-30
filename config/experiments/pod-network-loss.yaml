@@ -1,0 +1,11 @@
+args: "./experiments -name pod-network-loss"
+needs_runtime_socket: true
+env:
+  TOTAL_CHAOS_DURATION: "120"
+  NETWORK_PACKET_LOSS_PERCENTAGE: "100"
+  NETWORK_INTERFACE: "eth0"
+  PODS_AFFECTED_PERC: "100"
+  SEQUENCE: "parallel"
+  CONTAINER_RUNTIME: "containerd"
+  SOCKET_PATH: "/run/k3s/containerd/containerd.sock"
+  RAMP_TIME: "0"

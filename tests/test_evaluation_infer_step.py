@@ -15,7 +15,6 @@ See `notebooks/TEMUAN_VALIDASI.md` (BUG-2) and `notebooks/RENCANA_REVISI_PLATFOR
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 

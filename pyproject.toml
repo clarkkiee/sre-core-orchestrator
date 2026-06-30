@@ -253,6 +253,17 @@ module = "tests.*"
 disallow_untyped_decorators = false
 
 # =============================================================================
+# Pyright / Pylance - Editor type checker
+# mypy is the enforced checker (see [tool.mypy]); these settings keep the
+# VSCode editor from disagreeing with it. Celery's weak stubs make Pyright
+# treat task functions as plain functions, so it falsely flags `.delay`/
+# `.apply_async` access — silence that to match mypy's `celery.*` ignore.
+# =============================================================================
+[tool.pyright]
+reportAttributeAccessIssue = "none"
+reportFunctionMemberAccess = "none"
+
+# =============================================================================
 # Pytest - Testing framework
 # =============================================================================
 [tool.pytest.ini_options]

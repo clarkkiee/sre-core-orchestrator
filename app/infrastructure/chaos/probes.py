@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
 from string import Template
 from typing import Any, TypedDict
 
@@ -9,12 +10,24 @@ from app.utils.config import Settings
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class ProbeBuildContext:
+    experiment_type: str
+    namespace: str
+    target_label: str
+    target_port: str
+    prom_url: str | None
+    service_protocol: str = "http"
+    target_clusterip: str = ""
+    deployment_thresholds: dict[str, Any] | None = None
+    experiment_configuration: dict[str, Any] | None = None
+
 class ProbeOverrides(TypedDict, total=False):
     override: list[dict[str, Any]]
     additional: list[dict[str, Any]]
     disable: list[str]
     thresholds: dict[str, Any]
-    
+
 def _global_thresholds(settings: Settings) -> dict[str, Any]:
     return {
         "target_port": settings.PROBE_DEFAULT_TARGET_PORT,
@@ -35,16 +48,14 @@ def _global_thresholds(settings: Settings) -> dict[str, Any]:
         "tcp_probe_image": settings.PROBE_DEFAULT_TCP_CMD_PROBE_IMAGE,
         "kubectl_probe_image": settings.PROBE_DEFAULT_KUBECTL_PROBE_IMAGE
     }
-    
-# HELPERS
 
 def _tcp_connect_command() -> str:
     return "nc -z -w 3 ${target_clusterip} ${target_port} && echo 'OK' || echo 'FAIL'"
-    
+
 def _tcp_unreachable_command() -> str:
     return "nc -z -w 3 ${target_clusterip} ${target_port} && echo 'REACHABLE' || echo 'TIMEOUT'"
 
-# SOT PROBES UNTUK BASELINE 
+# SOT PROBES UNTUK BASELINE
 _SOT_HTTP_BASELINE: dict[str, Any] = {
     "name": "${target_name}-baseline-guard",
     "type": "httpProbe",
@@ -95,7 +106,7 @@ _SOT_TCP_BASELINE: dict[str, Any] = {
 _CONTINUOUS_HTTP_LIVENESS: dict[str, Any] = {
     "name": "${target_name}-fault-availability",
     "type": "httpProbe",
-    "mode": "Continuous",   
+    "mode": "Continuous",
     "runProperties": {
         "probeTimeout": "${liveness_timeout_s}s",
         "interval": "${liveness_poll_s}s",
@@ -262,7 +273,7 @@ _EOT_PROM_NO_RESTART_CASCADE: dict[str, Any] = {
     "promProbe/inputs": {
         "endpoint": "${prom_url}",
         "query": """
-            sum(increase(kube_pod_container_restarts_total{namespace="${namespace}", pod=~"${target_name}-.*"}[120s]))
+            sum(increase(kube_pod_container_restarts_total{namespace='${namespace}', pod=~'${target_name}-.*'}[120s])) or vector(0)
         """,
         "comparator": {
             "type": "float",
@@ -388,28 +399,28 @@ def resolve_thresholds(
 
 def derive_thresholds_from_baseline(
     baseline_metrics: dict[str, float | None],
-    settings: Settings 
+    settings: Settings
 ) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
-    
+
     p95 = baseline_metrics.get("baseline_p95_ms")
     if p95 is not None and p95 > 0:
         scaled = int(round(p95 * settings.PROBE_LATENCY_TOLERANCE_FACTOR))
         overrides["p95_baseline_threshold_ms"] = scaled
         overrides["p95_recovery_threshold_ms"] = scaled
-    
+
     p99 = baseline_metrics.get("baseline_p99_ms")
     if p99 is not None and p99 > 0:
         scaled = int(round(p99 * settings.PROBE_LATENCY_TOLERANCE_FACTOR))
         overrides["p99_baseline_threshold_ms"] = scaled
         overrides["p99_recovery_threshold_ms"] = scaled
-    
+
     sr = baseline_metrics.get("baseline_success_rate")
     if sr is not None and sr > 0:
         overrides["success_rate_slo"] = round(
             sr * settings.PROBE_SUCCESS_TOLERANCE_FACTOR, 4
-        )        
-        
+        )
+
     return overrides
 
 def _extract_target_name(app_label: str) -> str:
@@ -471,15 +482,9 @@ def _seconds(value: Any, default: int) -> int:
 
 
 def estimate_eot_probe_overhead_seconds(probes: list[dict[str, Any]]) -> int:
-    """Estimate worst-case additional runtime from all rendered EOT probes.
-
-    Litmus EOT probes may run after the chaos duration finishes. When many EOT probes
-    are configured, a static timeout can under-estimate total runtime and trigger
-    false experiment timeouts.
-    """
     total = 0
     eot_breakdown = []
-    
+
     for probe in probes:
         if str(probe.get("mode", "")).upper() != "EOT":
             continue
@@ -514,51 +519,44 @@ def estimate_eot_probe_overhead_seconds(probes: list[dict[str, Any]]) -> int:
             total,
             eot_breakdown,
         )
-    
+
     return total
 
 def build_probes(
+    target: ProbeBuildContext,
     *,
-    experiment_type: str,
-    namespace: str,
-    target_label: str,
-    target_port: str,
-    service_protocol: str = "http",
-    target_clusterip: str = "",
-    prom_url: str | None,
-    settings: Settings,
-    deployment_thresholds: dict[str, Any] | None = None,
-    experiment_configuration: dict[str, Any] | None = None,
+    settings: Settings
 ) -> list[dict[str, Any]]:
-    
-    overrides: ProbeOverrides = (experiment_configuration or {}).get("probes") or {}
-    
+
+    overrides: ProbeOverrides = (target.experiment_configuration or {}).get("probes") or {}
+
     thresholds = resolve_thresholds(
         experiment_overrides=overrides.get("thresholds"),
-        deployment_thresholds=deployment_thresholds,
+        deployment_thresholds=target.deployment_thresholds,
         settings=settings,
     )
-    
+
     ctx = {
         **thresholds,
-        "namespace": namespace,
-        "target_label": target_label,
-        "target_name": _extract_target_name(target_label),
-        "target_port": target_port,
-        "target_clusterip": target_clusterip,
-        "prom_url": prom_url or "",
+        "namespace": target.namespace,
+        "target_label": target.target_label,
+        "target_name": _extract_target_name(target.target_label),
+        "target_port": target.target_port,
+        "target_clusterip": target.target_clusterip,
+        "prom_url": target.prom_url or "",
         "tcp_probe_image": settings.PROBE_DEFAULT_TCP_CMD_PROBE_IMAGE
     }
-    
-    if "override" in overrides and overrides["override"]:
-        raw_templates: list[dict[str, Any]] = list(overrides["override"])
+
+    override_templates = overrides.get("override")
+    if override_templates:
+        raw_templates: list[dict[str, Any]] = list(override_templates)
     else:
         registry = (
             DEFAULT_PROBE_TEMPLATES
-            if service_protocol.lower().strip() == "http"
+            if target.service_protocol.lower().strip() == "http"
             else DEFAULT_TCP_PROBE_TEMPLATES
         )
-        raw_templates = list(registry.get(experiment_type, []))
+        raw_templates = list(registry.get(target.experiment_type, []))
         disable = set(overrides.get("disable") or [])
         if disable:
             raw_templates = [
@@ -567,7 +565,7 @@ def build_probes(
             ]
         if overrides.get("additional"):
             raw_templates.extend(overrides.get("additional") or [])
-            
+
     rendered: list[dict[str, Any]] = []
     for tpl in raw_templates:
         spec = _render(copy.deepcopy(tpl), ctx)
@@ -579,14 +577,13 @@ def build_probes(
                 spec.get("name", "unknown") if isinstance(spec, dict) else "unknown",
             )
             continue
-        if spec.get("type") == "promProbe" and not prom_url:
+        if spec.get("type") == "promProbe" and not target.prom_url:
             logger.warning(
                 "Skipping promProbe %s: cluster has no victoriametrics_url",
                 spec.get("name"),
             )
             continue
-        
-        # Log rendered probe details for diagnostics
+
         if spec.get("mode", "").upper() == "EOT":
             rp = spec.get("runProperties", {})
             logger.debug(
@@ -597,7 +594,7 @@ def build_probes(
                 rp.get("probeTimeout"),
                 rp.get("retry"),
             )
-        
+
         rendered.append(spec)
-        
+
     return rendered

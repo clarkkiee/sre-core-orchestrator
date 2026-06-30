@@ -2,7 +2,6 @@
 
 class MultipassError(Exception):
     """Base exception for Multipass operations"""
-    pass
 
 class MultipassCommandError(MultipassError):
     """Raised when a Multipass command fails"""

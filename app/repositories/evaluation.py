@@ -1,13 +1,14 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import insert, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.chaos import ChaosExperiment
 from app.models.evaluation_indicator import EvaluationIndicator, MeasurementScope
 from app.models.experiment_evaluation import EvaluationStatus, ExperimentEvaluation
-from app.models.chaos import ChaosExperiment
+
 
 class EvaluationRepository:
     def __init__(self, db: AsyncSession) -> None:

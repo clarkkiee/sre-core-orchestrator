@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import logging
+from http import HTTPStatus
 from typing import Any
 
 import httpx
 
 from app.infrastructure.agent.exceptions import AgentUnreachableError
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class VMSpec:
+    cpus: int = 2
+    memory: str = "2G"
+    disk: str = "10G"
+    image: str = "22.04"
 
 class AgentClient:
     """HTTP client for communicating with the provisioning agent."""
@@ -48,7 +57,7 @@ class AgentClient:
         try:
             client = await self._client()
             resp = await client.get("/health", timeout=3.0)
-            return resp.status_code == 200  # noqa: PLR2004
+            return resp.status_code == HTTPStatus.OK
         except httpx.HTTPError:
             return False
 
@@ -58,8 +67,7 @@ class AgentClient:
         resp = await client.get("/health", timeout=3.0)
         resp.raise_for_status()
         return resp.json()
-
-    # ---- Tasks ----
+    
 
     async def submit_provision(
         self,
@@ -67,13 +75,10 @@ class AgentClient:
         task_id: str,
         cluster_name: str,
         worker_count: int = 2,
-        vm_cpus: int = 2,
-        vm_memory: str = "2G",
-        vm_disk: str = "10G",
-        vm_image: str = "22.04",
+        vm: VMSpec | None = None,
         disable_traefik: bool = True,
     ) -> None:
-        """POST /tasks/provision. Raises on non-202."""
+        vm = vm or VMSpec()
         client = await self._client()
         resp = await client.post(
             "/tasks/provision",
@@ -81,14 +86,14 @@ class AgentClient:
                 "task_id": task_id,
                 "cluster_name": cluster_name,
                 "worker_count": worker_count,
-                "vm_cpus": vm_cpus,
-                "vm_memory": vm_memory,
-                "vm_disk": vm_disk,
-                "vm_image": vm_image,
+                "vm_cpus": vm.cpus,
+                "vm_memory": vm.memory,
+                "vm_disk": vm.disk,
+                "vm_image": vm.image,
                 "disable_traefik": disable_traefik,
             },
         )
-        if resp.status_code != 202:  # noqa: PLR2004
+        if resp.status_code != HTTPStatus.ACCEPTED:
             body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             msg = body.get("error", resp.text)
             raise AgentUnreachableError(
@@ -103,7 +108,6 @@ class AgentClient:
         cluster_name: str,
         worker_count: int = 2,
     ) -> None:
-        """POST /tasks/teardown. Raises on non-202."""
         client = await self._client()
         resp = await client.post(
             "/tasks/teardown",
@@ -113,7 +117,7 @@ class AgentClient:
                 "worker_count": worker_count,
             },
         )
-        if resp.status_code != 202:  # noqa: PLR2004
+        if resp.status_code != HTTPStatus.ACCEPTED:
             body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             msg = body.get("error", resp.text)
             raise AgentUnreachableError(
@@ -137,10 +141,9 @@ class AgentClient:
     # ---- VMs ----
 
     async def get_vm(self, vm_name: str) -> dict[str, Any] | None:
-        """GET /vms/{name}. Returns VM info dict, or None if 404."""
         client = await self._client()
         resp = await client.get(f"/vms/{vm_name}")
-        if resp.status_code == 404:  # noqa: PLR2004
+        if resp.status_code == HTTPStatus.NOT_FOUND:
             return None
         resp.raise_for_status()
         return resp.json()

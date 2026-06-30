@@ -4,20 +4,12 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.cluster import Cluster, ClusterStatus
+from app.repositories.base import BaseRepository
 
 
-class ClusterRepository:
-    def __init__(self, db: AsyncSession) -> None:
-        self.db = db
-
-    async def create(self, cluster: Cluster) -> Cluster:
-        self.db.add(cluster)
-        await self.db.flush()
-        await self.db.refresh(cluster)
-        return cluster
+class ClusterRepository(BaseRepository[Cluster]):
 
     async def get_by_id(self, cluster_id: uuid.UUID) -> Cluster | None:
         result = await self.db.execute(
@@ -43,13 +35,6 @@ class ClusterRepository:
         stmt = stmt.order_by(Cluster.created_at.desc())
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
-
-    async def update(self, cluster: Cluster, **fields: object) -> Cluster:
-        for key, value in fields.items():
-            setattr(cluster, key, value)
-        await self.db.flush()
-        await self.db.refresh(cluster)
-        return cluster
 
     async def list_all(
         self,
