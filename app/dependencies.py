@@ -24,6 +24,7 @@ from app.repositories.job import JobRepository
 from app.repositories.raw_metric_sample import RawMetricSampleRepository
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
+from app.services.analytics import AnalyticsService
 from app.services.campaign import CampaignService
 from app.services.chaos import ChaosService
 from app.services.cluster import ClusterService
@@ -246,3 +247,20 @@ def _get_evaluation_repository(db: DbSession) -> EvaluationRepository:
 EvaluationRepositoryDep = Annotated[
     EvaluationRepository, Depends(_get_evaluation_repository)
 ]
+
+
+# Analytics Service
+def get_analytics_service(
+    cluster_repository: ClusterRepositoryDep,
+    deployment_repository: DeploymentRepositoryDep,
+    chaos_repository: ChaosRepositoryDep,
+    campaign_repository: CampaignRepositoryDep
+) -> AnalyticsService:
+    return AnalyticsService(
+        campaign_repository=campaign_repository,
+        chaos_repository=chaos_repository,
+        cluster_repository=cluster_repository,
+        deployment_repository=deployment_repository
+    )
+    
+AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]

@@ -1,10 +1,10 @@
 import uuid
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, select, func
 
 from app.models.campaign import ChaosCampaign
 from app.repositories.base import BaseRepository
-from app.schemas.campaign import CampaignFilter
+from app.schemas.campaign import CampaignFilter, CampaignStatus
 from app.schemas.pagination import Pagination
 
 
@@ -36,6 +36,19 @@ class CampaignRepository(BaseRepository[ChaosCampaign]):
         stmt = self._apply_filters(stmt, filters)
         stmt = stmt.order_by(ChaosCampaign.created_at.desc())
         return await self.paginate(stmt, pagination)
+    
+    async def count_by_status(
+        self,
+        tenant_id: uuid.UUID | None = None
+    ) -> dict[CampaignStatus, int]:
+        stmt = select(ChaosCampaign.status, func.count()).group_by(ChaosCampaign.status)
+        if tenant_id is not None:
+            stmt = stmt.where(ChaosCampaign.tenant_id == tenant_id)
+        result = await self.db.execute(stmt)
+        counts = {status: count for status, count in result.all()}
+        return {
+            status: counts.get(status, 0) for status in CampaignStatus
+        }
 
     @staticmethod
     def _apply_filters(
