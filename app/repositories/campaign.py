@@ -1,57 +1,54 @@
 import uuid
-from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy import Select, select
 
 from app.models.campaign import ChaosCampaign
+from app.repositories.base import BaseRepository
+from app.schemas.campaign import CampaignFilter
+from app.schemas.pagination import Pagination
 
 
-class CampaignRepository:
-    def __init__(self, db: AsyncSession) -> None:
-        self.db = db
-
-    async def create(self, campaign: ChaosCampaign) -> ChaosCampaign:
-        self.db.add(campaign)
-        await self.db.flush()
-        await self.db.refresh(campaign)
-        return campaign
-
+class CampaignRepository(BaseRepository[ChaosCampaign]):
     async def get_by_id(self, campaign_id: uuid.UUID) -> ChaosCampaign | None:
-        stmt = (
-            select(ChaosCampaign)
-            .where(ChaosCampaign.id == campaign_id)
-            .options(selectinload(ChaosCampaign.experiments))
-        )
+        stmt = select(ChaosCampaign).where(ChaosCampaign.id == campaign_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def list_by_tenant(
         self,
         tenant_id: uuid.UUID,
-        cluster_id: uuid.UUID | None = None,
-    ) -> list[ChaosCampaign]:
-        stmt = (
-            select(ChaosCampaign)
-            .where(ChaosCampaign.tenant_id == tenant_id)
-            .options(selectinload(ChaosCampaign.experiments))
-        )
-
-        if cluster_id:
-            stmt = stmt.where(ChaosCampaign.cluster_id == cluster_id)
-
+        *,
+        pagination: Pagination,
+        filters: CampaignFilter | None = None,
+    ) -> tuple[list[ChaosCampaign], int]:
+        stmt = select(ChaosCampaign).where(ChaosCampaign.tenant_id == tenant_id)
+        stmt = self._apply_filters(stmt, filters)
         stmt = stmt.order_by(ChaosCampaign.created_at.desc())
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+        return await self.paginate(stmt, pagination)
 
-    async def update(
+    async def list_all(
         self,
-        campaign: ChaosCampaign,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> ChaosCampaign:
-        for key, value in kwargs.items():
-            setattr(campaign, key, value)
-        await self.db.flush()
-        await self.db.refresh(campaign)
-        return campaign
+        *,
+        pagination: Pagination,
+        filters: CampaignFilter | None = None,
+    ) -> tuple[list[ChaosCampaign], int]:
+        stmt = select(ChaosCampaign)
+        stmt = self._apply_filters(stmt, filters)
+        stmt = stmt.order_by(ChaosCampaign.created_at.desc())
+        return await self.paginate(stmt, pagination)
+
+    @staticmethod
+    def _apply_filters(
+        stmt: Select[tuple[ChaosCampaign]],
+        filters: CampaignFilter | None = None,
+    ) -> Select[tuple[ChaosCampaign]]:
+        if not filters:
+            return stmt
+        if filters.status is not None:
+            stmt = stmt.where(ChaosCampaign.status == filters.status)
+        if filters.cluster_id is not None:
+            stmt = stmt.where(ChaosCampaign.cluster_id == filters.cluster_id)
+        if filters.search:
+            pattern = f"%{filters.search}%"
+            stmt = stmt.where(ChaosCampaign.target_namespace.ilike(pattern))
+        return stmt

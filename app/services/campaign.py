@@ -1,20 +1,20 @@
 import uuid
 
-from sqlalchemy import inspect
-
 from app.models.campaign import CampaignStatus, ChaosCampaign
 from app.models.job import Job, JobStatus, JobType
+from app.models.user import User
 from app.repositories.campaign import CampaignRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.schemas.campaign import (
-    CampaignListResponse,
+    CampaignFilter,
+    CampaignPage,
     CampaignResponse,
     StartCampaignRequest,
     StopCampaignResponse,
 )
-from app.schemas.chaos import ChaosExperimentResponse
+from app.schemas.pagination import PaginationParams
 from app.tasks.campaign_tasks import run_chaos_campaign_task
 
 
@@ -79,14 +79,26 @@ class CampaignService:
 
     async def list_campaigns(
         self,
-        tenant_id: uuid.UUID,
-        cluster_id: uuid.UUID | None = None,
-    ) -> CampaignListResponse:
-        campaigns = await self.campaign_repository.list_by_tenant(
-            tenant_id=tenant_id, cluster_id=cluster_id
-        )
+        user: User,
+        params: PaginationParams,
+        filters: CampaignFilter,
+    ) -> CampaignPage:
+        pagination = params.to_pagination()
+
+        if user.is_admin:
+            campaigns, total = await self.campaign_repository.list_all(
+                pagination=pagination,
+                filters=filters,
+            )
+        else:
+            campaigns, total = await self.campaign_repository.list_by_tenant(
+                user.id,
+                pagination=pagination,
+                filters=filters,
+            )
+
         items = [self._campaign_to_response(c) for c in campaigns]
-        return CampaignListResponse(campaigns=items, total=len(items))
+        return CampaignPage.create(items, total=total, params=params)
 
     async def stop_campaign(
         self,
@@ -121,34 +133,6 @@ class CampaignService:
 
     @staticmethod
     def _campaign_to_response(campaign: ChaosCampaign) -> CampaignResponse:
-        # Avoid triggering async lazy-loads in sync response mapping.
-        state = inspect(campaign)
-        is_experiments_loaded = "experiments" not in state.unloaded
-        campaign_experiments = campaign.experiments if is_experiments_loaded else []
-
-        experiments = [
-            ChaosExperimentResponse(
-                id=e.id,
-                tenant_id=e.tenant_id,
-                cluster_id=e.cluster_id,
-                deployment_id=e.deployment_id,
-                experiment_type=e.experiment_type,
-                target_namespace=e.target_namespace,
-                target_label=e.target_label,
-                status=e.status,
-                status_message=e.status_message,
-                duration_seconds=e.duration_seconds,
-                chaos_engine_name=e.chaos_engine_name,
-                configuration=e.configuration,
-                result=e.result,
-                started_at=e.started_at,
-                completed_at=e.completed_at,
-                created_at=e.created_at,
-                updated_at=e.updated_at,
-            )
-            for e in campaign_experiments
-        ]
-
         return CampaignResponse(
             id=campaign.id,
             tenant_id=campaign.tenant_id,
@@ -160,7 +144,6 @@ class CampaignService:
             discovered_services=campaign.discovered_services,
             total_experiments=campaign.total_experiments,
             completed_experiments=campaign.completed_experiments,
-            experiments=experiments,
             started_at=campaign.started_at,
             completed_at=campaign.completed_at,
             created_at=campaign.created_at,

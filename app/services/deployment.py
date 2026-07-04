@@ -12,14 +12,16 @@ from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.schemas.deployment import (
-    AdminDeploymentListResponse,
+    AdminDeploymentPage,
     AdminDeploymentResponse,
     CreateDeploymentRequest,
     DeleteDeploymentResponse,
-    DeploymentListResponse,
+    DeploymentFilter,
+    DeploymentPage,
     DeploymentResponse,
     DeploymentWithJobResponse,
 )
+from app.schemas.pagination import PaginationParams
 
 
 class DeploymentService:
@@ -164,23 +166,32 @@ class DeploymentService:
     async def list_deployments(
         self,
         user: User,
-    ) -> DeploymentListResponse | AdminDeploymentListResponse:
+        params: PaginationParams,
+        filters: DeploymentFilter,
+    ) -> DeploymentPage | AdminDeploymentPage:
+        pagination = params.to_pagination()
+
         if user.is_admin:
-            deployments = await self.deployment_repository.list_all()
-            admin_items = [
+            deployments, total = await self.deployment_repository.list_all(
+                pagination=pagination,
+                filters=filters,
+            )
+            items = [
                 AdminDeploymentResponse(
                     **self._to_fields(d),
                     tenant_id=str(d.tenant_id),
                 )
                 for d in deployments
             ]
-            return AdminDeploymentListResponse(
-                deployments=admin_items, total=len(admin_items)
-            )
+            return AdminDeploymentPage.create(items, total=total, params=params)
 
-        deployments = await self.deployment_repository.list_by_tenant(user.id)
+        deployments, total = await self.deployment_repository.list_by_tenant(
+            user.id,
+            pagination=pagination,
+            filters=filters,
+        )
         items = [DeploymentResponse(**self._to_fields(d)) for d in deployments]
-        return DeploymentListResponse(deployments=items, total=len(items))
+        return DeploymentPage.create(items, total=total, params=params)
 
     @staticmethod
     def _to_fields(deployment: Deployment) -> dict[str, Any]:

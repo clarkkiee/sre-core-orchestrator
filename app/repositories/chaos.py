@@ -1,46 +1,63 @@
 import uuid
-from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Select, or_, select
 
 from app.models.chaos import ChaosExperiment
+from app.repositories.base import BaseRepository
+from app.schemas.chaos import ChaosExperimentFilter
+from app.schemas.pagination import Pagination
 
 
-class ChaosRepository:
-    def __init__(self, db: AsyncSession) -> None:
-        self.db = db
-
-    async def create(self, experiment: ChaosExperiment) -> ChaosExperiment:
-        self.db.add(experiment)
-        await self.db.flush()
-        await self.db.refresh(experiment)
-        return experiment
-
+class ChaosRepository(BaseRepository[ChaosExperiment]):
     async def get_by_id(self, experiment_id: uuid.UUID) -> ChaosExperiment | None:
         return await self.db.get(ChaosExperiment, experiment_id)
 
     async def list_by_tenant(
         self,
         tenant_id: uuid.UUID,
-        cluster_id: uuid.UUID | None = None,
-    ) -> list[ChaosExperiment]:
+        *,
+        pagination: Pagination,
+        filters: ChaosExperimentFilter | None = None,
+    ) -> tuple[list[ChaosExperiment], int]:
         stmt = select(ChaosExperiment).where(ChaosExperiment.tenant_id == tenant_id)
-
-        if cluster_id:
-            stmt = stmt.where(ChaosExperiment.cluster_id == cluster_id)
-
+        stmt = self._apply_filters(stmt, filters)
         stmt = stmt.order_by(ChaosExperiment.created_at.desc())
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+        return await self.paginate(stmt, pagination)
 
-    async def update(
+    async def list_all(
         self,
-        experiment: ChaosExperiment,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> ChaosExperiment:
-        for key, value in kwargs.items():
-            setattr(experiment, key, value)
-        await self.db.flush()
-        await self.db.refresh(experiment)
-        return experiment
+        *,
+        pagination: Pagination,
+        filters: ChaosExperimentFilter | None = None,
+    ) -> tuple[list[ChaosExperiment], int]:
+        stmt = select(ChaosExperiment)
+        stmt = self._apply_filters(stmt, filters)
+        stmt = stmt.order_by(ChaosExperiment.created_at.desc())
+        return await self.paginate(stmt, pagination)
+
+    @staticmethod
+    def _apply_filters(
+        stmt: Select[tuple[ChaosExperiment]],
+        filters: ChaosExperimentFilter | None = None,
+    ) -> Select[tuple[ChaosExperiment]]:
+        if not filters:
+            return stmt
+        if filters.status is not None:
+            stmt = stmt.where(ChaosExperiment.status == filters.status)
+        if filters.experiment_type is not None:
+            stmt = stmt.where(
+                ChaosExperiment.experiment_type == filters.experiment_type
+            )
+        if filters.cluster_id is not None:
+            stmt = stmt.where(ChaosExperiment.cluster_id == filters.cluster_id)
+        if filters.campaign_id is not None:
+            stmt = stmt.where(ChaosExperiment.campaign_id == filters.campaign_id)
+        if filters.search:
+            pattern = f"%{filters.search}%"
+            stmt = stmt.where(
+                or_(
+                    ChaosExperiment.target_namespace.ilike(pattern),
+                    ChaosExperiment.target_label.ilike(pattern),
+                )
+            )
+        return stmt
