@@ -215,3 +215,6 @@ agent/bin/
 
 # Docs
 docs/
+
+# vscode
+.vscode/

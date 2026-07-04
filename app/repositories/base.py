@@ -1,6 +1,8 @@
 from typing import Any, Generic, TypeVar
 
+from sqlalchemy import Select, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.schemas.pagination import Pagination
 
 ModelT = TypeVar("ModelT")
 
@@ -20,3 +22,18 @@ class BaseRepository(Generic[ModelT]):
         await self.db.flush()
         await self.db.refresh(obj)
         return obj
+
+    async def paginate(
+        self,
+        stmt: Select[tuple[ModelT]],
+        pagination: Pagination,
+    ) -> tuple[list[ModelT], int]:
+        total = await self.db.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        ) or 0
+        
+        result = await self.db.execute(
+            stmt.limit(pagination.limit).offset(pagination.offset)
+        )
+        
+        return list(result.scalars().all()), total

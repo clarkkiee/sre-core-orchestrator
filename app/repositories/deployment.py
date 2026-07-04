@@ -2,10 +2,12 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import Select, or_, select
 
 from app.models.deployment import Deployment
 from app.repositories.base import BaseRepository
+from app.schemas.deployment import DeploymentFilter
+from app.schemas.pagination import Pagination
 
 
 class DeploymentRepository(BaseRepository[Deployment]):
@@ -18,15 +20,30 @@ class DeploymentRepository(BaseRepository[Deployment]):
     async def list_by_tenant(
         self,
         tenant_id: uuid.UUID,
-    ) -> list[Deployment]:
+        *,
+        pagination: Pagination,
+        filters: DeploymentFilter | None = None,
+    ) -> tuple[list[Deployment], int]:
         stmt = (
             select(Deployment)
             .where(Deployment.tenant_id == tenant_id)
             .where(Deployment.deleted_at.is_(None))
-            .order_by(Deployment.created_at.desc())
         )
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+        stmt = self._apply_filters(stmt, filters)
+        stmt = stmt.order_by(Deployment.created_at.desc())
+        return await self.paginate(stmt, pagination)
+
+    async def list_all(
+        self,
+        *,
+        pagination: Pagination,
+        filters: DeploymentFilter | None = None,
+    ) -> tuple[list[Deployment], int]:
+        """Return all deployments across all tenants (excludes soft-deleted)."""
+        stmt = select(Deployment).where(Deployment.deleted_at.is_(None))
+        stmt = self._apply_filters(stmt, filters)
+        stmt = stmt.order_by(Deployment.created_at.desc())
+        return await self.paginate(stmt, pagination)
 
     async def list_by_cluster(
         self,
@@ -41,12 +58,24 @@ class DeploymentRepository(BaseRepository[Deployment]):
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def list_all(self) -> list[Deployment]:
-        """Return all deployments across all tenants (excludes soft-deleted)."""
-        stmt = (
-            select(Deployment)
-            .where(Deployment.deleted_at.is_(None))
-            .order_by(Deployment.created_at.desc())
-        )
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+    @staticmethod
+    def _apply_filters(
+        stmt: Select[tuple[Deployment]],
+        filters: DeploymentFilter | None = None,
+    ) -> Select[tuple[Deployment]]:
+        if not filters:
+            return stmt
+        if filters.status is not None:
+            stmt = stmt.where(Deployment.status == filters.status)
+        if filters.strategy is not None:
+            stmt = stmt.where(Deployment.strategy == filters.strategy)
+        if filters.search:
+            pattern = f"%{filters.search}%"
+            stmt = stmt.where(
+                or_(
+                    Deployment.repo_url.ilike(pattern),
+                    Deployment.namespace.ilike(pattern),
+                    Deployment.branch.ilike(pattern),
+                )
+            )
+        return stmt

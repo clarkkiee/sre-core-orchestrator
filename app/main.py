@@ -66,3 +66,4 @@ async def root() -> dict[str, str]:
 
 
 app.include_router(api_router)
+

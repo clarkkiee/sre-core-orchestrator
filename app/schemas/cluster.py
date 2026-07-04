@@ -4,7 +4,10 @@ import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
-
+from dataclasses import dataclass
+from fastapi import Query
+from app.schemas.pagination import DefaultDataPage
+from app.models.cluster import ClusterStatus
 
 class CreateClusterRequest(BaseModel):
     name: str = Field(
@@ -47,11 +50,6 @@ class ClusterResponse(BaseModel):
     expires_at: datetime.datetime | None
 
 
-class ClusterListResponse(BaseModel):
-    clusters: list[ClusterResponse]
-    total: int
-
-
 class ClusterWithJobResponse(ClusterResponse):
     job_id: str | None = None
     job_status: str | None = None
@@ -81,7 +79,33 @@ class ReconnectClusterResponse(BaseModel):
 class AdminClusterResponse(ClusterResponse):
     tenant_id: str
 
+@dataclass(frozen=True)
+class ClusterFilter:
+    search: str | None = None
+    status: ClusterStatus | None = None
 
-class AdminClusterListResponse(BaseModel):
-    clusters: list[AdminClusterResponse]
-    total: int
+class ClusterFilterParams:
+    def __init__(
+        self,
+        search: str | None = Query(
+            default=None,
+            min_length=1,
+            max_length=100,
+            description="Free text search over name / kind name"
+        ),
+        status: ClusterStatus | None = Query(
+            default=None,
+            description="Filter by cluster status"
+        )
+    ) -> None:
+        self.search = search
+        self.status = status
+
+    def to_filter(self) -> ClusterFilter:
+        return ClusterFilter(
+            search=self.search.strip() if self.search is not None else None,
+            status=self.status
+        )
+
+ClusterPage = DefaultDataPage[ClusterResponse]
+AdminClusterPage = DefaultDataPage[AdminClusterResponse]

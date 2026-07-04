@@ -1,9 +1,14 @@
 """Pydantic schemas for deployment endpoints."""
 
 import datetime
+from dataclasses import dataclass
 from typing import Any
 
+from fastapi import Query
 from pydantic import BaseModel, Field
+
+from app.models.deployment import DeploymentStatus, DeployStrategy
+from app.schemas.pagination import DefaultDataPage
 
 
 class CreateDeploymentRequest(BaseModel):
@@ -57,11 +62,6 @@ class DeleteDeploymentResponse(BaseModel):
     message: str
 
 
-class DeploymentListResponse(BaseModel):
-    deployments: list[DeploymentResponse]
-    total: int
-
-
 class DeploymentWithJobResponse(DeploymentResponse):
     job_id: str | None = None
     job_status: str | None = None
@@ -71,6 +71,42 @@ class AdminDeploymentResponse(DeploymentResponse):
     tenant_id: str
 
 
-class AdminDeploymentListResponse(BaseModel):
-    deployments: list[AdminDeploymentResponse]
-    total: int
+@dataclass(frozen=True)
+class DeploymentFilter:
+    search: str | None = None
+    status: DeploymentStatus | None = None
+    strategy: DeployStrategy | None = None
+
+
+class DeploymentFilterParams:
+    def __init__(
+        self,
+        search: str | None = Query(
+            default=None,
+            min_length=1,
+            max_length=100,
+            description="Free text search over repo URL / namespace / branch",
+        ),
+        status: DeploymentStatus | None = Query(
+            default=None,
+            description="Filter by deployment status",
+        ),
+        strategy: DeployStrategy | None = Query(
+            default=None,
+            description="Filter by deployment strategy",
+        ),
+    ) -> None:
+        self.search = search
+        self.status = status
+        self.strategy = strategy
+
+    def to_filter(self) -> DeploymentFilter:
+        return DeploymentFilter(
+            search=self.search.strip() if self.search is not None else None,
+            status=self.status,
+            strategy=self.strategy,
+        )
+
+
+DeploymentPage = DefaultDataPage[DeploymentResponse]
+AdminDeploymentPage = DefaultDataPage[AdminDeploymentResponse]

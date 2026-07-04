@@ -3,16 +3,18 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import ChaosServiceDep, CurrentUser
 from app.infrastructure.chaos import experiments
 from app.schemas.chaos import (
-    ChaosExperimentListResponse,
+    ChaosExperimentFilterParams,
+    ChaosExperimentPage,
     ChaosExperimentResponse,
     StartChaosExperimentRequest,
     StopExperimentResponse,
 )
+from app.schemas.pagination import PaginationParams
 
 router = APIRouter(prefix="/chaos", tags=["chaos"])
 
@@ -33,15 +35,17 @@ async def start_experiment(
 
 @router.get(
     "/experiments",
-    response_model=ChaosExperimentListResponse,
+    response_model=ChaosExperimentPage,
     status_code=status.HTTP_200_OK,
 )
 async def list_experiments(
     user: CurrentUser,
     chaos_service: ChaosServiceDep,
-    cluster_id: uuid.UUID | None = None,
-) -> ChaosExperimentListResponse:
-    return await chaos_service.list_experiment(user.id, cluster_id)
+    params: PaginationParams = Depends(),
+    filters: ChaosExperimentFilterParams = Depends(),
+) -> ChaosExperimentPage:
+    """List chaos experiments. Admins see all experiments; regular users see their own."""
+    return await chaos_service.list_experiment(user, params, filters.to_filter())
 
 
 @router.get(

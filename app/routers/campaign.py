@@ -2,15 +2,17 @@
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import CampaignServiceDep, CurrentUser
 from app.schemas.campaign import (
-    CampaignListResponse,
+    CampaignFilterParams,
+    CampaignPage,
     CampaignResponse,
     StartCampaignRequest,
     StopCampaignResponse,
 )
+from app.schemas.pagination import PaginationParams
 
 router = APIRouter(prefix="/chaos", tags=["chaos-campaigns"])
 
@@ -31,15 +33,17 @@ async def start_campaign(
 
 @router.get(
     "/campaigns",
-    response_model=CampaignListResponse,
+    response_model=CampaignPage,
     status_code=status.HTTP_200_OK,
 )
 async def list_campaigns(
     user: CurrentUser,
     campaign_service: CampaignServiceDep,
-    cluster_id: uuid.UUID | None = None,
-) -> CampaignListResponse:
-    return await campaign_service.list_campaigns(user.id, cluster_id)
+    params: PaginationParams = Depends(),
+    filters: CampaignFilterParams = Depends(),
+) -> CampaignPage:
+    """List chaos campaigns. Admins see all campaigns; regular users see their own."""
+    return await campaign_service.list_campaigns(user, params, filters.to_filter())
 
 
 @router.get(

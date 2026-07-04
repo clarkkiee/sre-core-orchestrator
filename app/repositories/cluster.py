@@ -3,10 +3,12 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, select, text
+from sqlalchemy import Select, and_, select, text, or_
 
 from app.models.cluster import Cluster, ClusterStatus
+from app.schemas.cluster import ClusterFilter
 from app.repositories.base import BaseRepository
+from app.schemas.pagination import Pagination
 
 
 class ClusterRepository(BaseRepository[Cluster]):
@@ -27,28 +29,34 @@ class ClusterRepository(BaseRepository[Cluster]):
         self,
         tenant_id: uuid.UUID,
         *,
+        pagination: Pagination,
+        filters: ClusterFilter | None = None,
         include_deleted: bool = False,
-    ) -> list[Cluster]:
+    ) -> tuple[list[Cluster], int]:
         stmt = select(Cluster).where(Cluster.tenant_id == tenant_id)
+        
         if not include_deleted:
             stmt = stmt.where(Cluster.status != ClusterStatus.DELETED)
+        
+        stmt = self._apply_filters(stmt, filters)
         stmt = stmt.order_by(Cluster.created_at.desc())
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+        return await self.paginate(stmt, pagination)
 
     async def list_all(
         self,
         *,
+        pagination: Pagination,
+        filters: ClusterFilter | None = None,
         include_deleted: bool = False,
-    ) -> list[Cluster]:
-        """Return all clusters across all tenants."""
+    ) -> tuple[list[Cluster], int]:
         stmt = select(Cluster)
         if not include_deleted:
             stmt = stmt.where(Cluster.status != ClusterStatus.DELETED)
-        stmt = stmt.order_by(Cluster.created_at.desc())
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
 
+        stmt = self._apply_filters(stmt, filters)
+        stmt = stmt.order_by(Cluster.created_at.desc())
+        return await self.paginate(stmt, pagination)
+    
     async def acquire_port_allocation_lock(self) -> None:
         """Acquire a PostgreSQL advisory lock for port-block allocation.
 
@@ -81,3 +89,23 @@ class ClusterRepository(BaseRepository[Cluster]):
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    @staticmethod
+    def _apply_filters(
+        stmt: Select[tuple[Cluster]],
+        filters: ClusterFilter | None = None
+    ) -> Select[tuple[Cluster]]:
+        if not filters:
+            return stmt
+        if filters.status is not None:
+            stmt = stmt.where(Cluster.status == filters.status)
+        if filters.search:
+            pattern = f"%{filters.search}%"
+            stmt = stmt.where(
+                or_(
+                    Cluster.name.ilike(pattern),
+                    Cluster.kind_name.ilike(pattern)
+                )
+            )
+        return stmt
+        

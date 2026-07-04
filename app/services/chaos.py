@@ -5,15 +5,18 @@ from typing import Any
 from app.infrastructure.factories import build_litmus_manager
 from app.models.chaos import ChaosExperiment, ChaosExperimentStatus
 from app.models.job import Job, JobStatus, JobType
+from app.models.user import User
 from app.repositories.chaos import ChaosRepository
 from app.repositories.cluster import ClusterRepository
 from app.repositories.deployment import DeploymentRepository
 from app.repositories.job import JobRepository
 from app.schemas.chaos import (
-    ChaosExperimentListResponse,
+    ChaosExperimentFilter,
+    ChaosExperimentPage,
     ChaosExperimentResponse,
     StartChaosExperimentRequest,
 )
+from app.schemas.pagination import PaginationParams
 from app.tasks.chaos_tasks import run_chaos_experiment_task
 
 logger = logging.getLogger(__name__)
@@ -84,17 +87,29 @@ class ChaosService:
 
     async def list_experiment(
         self,
-        tenant_id: uuid.UUID,
-        cluster_id: uuid.UUID | None,
-    ) -> ChaosExperimentListResponse:
-        experiments = await self.chaos_repository.list_by_tenant(
-            tenant_id=tenant_id, cluster_id=cluster_id
-        )
+        user: User,
+        params: PaginationParams,
+        filters: ChaosExperimentFilter,
+    ) -> ChaosExperimentPage:
+        pagination = params.to_pagination()
+
+        if user.is_admin:
+            experiments, total = await self.chaos_repository.list_all(
+                pagination=pagination,
+                filters=filters,
+            )
+        else:
+            experiments, total = await self.chaos_repository.list_by_tenant(
+                user.id,
+                pagination=pagination,
+                filters=filters,
+            )
+
         items = [
             ChaosExperimentResponse(**self._experiment_to_fields(exp))
             for exp in experiments
         ]
-        return ChaosExperimentListResponse(experiments=items, total=len(items))
+        return ChaosExperimentPage.create(items, total=total, params=params)
 
     async def stop_experiment(
         self,

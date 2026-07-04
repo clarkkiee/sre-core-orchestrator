@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
 from app.dependencies import CurrentUser, DeploymentServiceDep
 from app.exceptions.errors import (
@@ -12,14 +12,16 @@ from app.exceptions.errors import (
     error_responses,
 )
 from app.schemas.deployment import (
-    AdminDeploymentListResponse,
+    AdminDeploymentPage,
     AdminDeploymentResponse,
     CreateDeploymentRequest,
     DeleteDeploymentResponse,
-    DeploymentListResponse,
+    DeploymentFilterParams,
+    DeploymentPage,
     DeploymentResponse,
     DeploymentWithJobResponse,
 )
+from app.schemas.pagination import PaginationParams
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
@@ -45,7 +47,7 @@ async def create_deployment(
 
 @router.get(
     "",
-    response_model=DeploymentListResponse | AdminDeploymentListResponse,
+    response_model=DeploymentPage | AdminDeploymentPage,
     responses=error_responses(
         (UnauthorizedError, "Invalid or expired token"),
     ),
@@ -53,9 +55,13 @@ async def create_deployment(
 async def list_deployments(
     current_user: CurrentUser,
     deployment_service: DeploymentServiceDep,
-) -> DeploymentListResponse | AdminDeploymentListResponse:
+    params: PaginationParams = Depends(),
+    filters: DeploymentFilterParams = Depends(),
+) -> DeploymentPage | AdminDeploymentPage:
     """List deployments. Admins see all deployments; regular users see their own."""
-    return await deployment_service.list_deployments(current_user)
+    return await deployment_service.list_deployments(
+        current_user, params, filters.to_filter()
+    )
 
 
 @router.get(

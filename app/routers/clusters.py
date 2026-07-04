@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import Response
 
 from app.dependencies import ClusterServiceDep, CurrentUser
@@ -13,16 +13,18 @@ from app.exceptions.errors import (
     error_responses,
 )
 from app.schemas.cluster import (
-    AdminClusterListResponse,
+    AdminClusterPage,
     AdminClusterResponse,
     ClusterHealthResponse,
-    ClusterListResponse,
+    ClusterPage,
     ClusterResponse,
     ClusterWithJobResponse,
     CreateClusterRequest,
     DeleteClusterResponse,
     ReconnectClusterResponse,
+    ClusterFilterParams
 )
+from app.schemas.pagination import PaginationParams
 
 router = APIRouter(prefix="/clusters", tags=["clusters"])
 
@@ -47,7 +49,7 @@ async def create_cluster(
 
 @router.get(
     "",
-    response_model=ClusterListResponse | AdminClusterListResponse,
+    response_model=ClusterPage | AdminClusterPage,
     responses=error_responses(
         (UnauthorizedError, "Invalid or expired token"),
     ),
@@ -55,9 +57,11 @@ async def create_cluster(
 async def list_clusters(
     current_user: CurrentUser,
     cluster_service: ClusterServiceDep,
-) -> ClusterListResponse | AdminClusterListResponse:
+    params: PaginationParams = Depends(),
+    filters: ClusterFilterParams = Depends()
+) -> ClusterPage | AdminClusterPage:
     """List clusters. Admins see all clusters; regular users see their own."""
-    return await cluster_service.list_clusters(current_user)
+    return await cluster_service.list_clusters(current_user, params, filters.to_filter())
 
 
 @router.get(

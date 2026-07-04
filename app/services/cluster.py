@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from app.exceptions.errors import ConflictError, NotFoundError
 from app.infrastructure.providers import get_provider
@@ -12,16 +12,18 @@ from app.models.user import User
 from app.repositories.cluster import ClusterRepository
 from app.repositories.job import JobRepository
 from app.schemas.cluster import (
-    AdminClusterListResponse,
+    AdminClusterPage,
     AdminClusterResponse,
     ClusterHealthResponse,
-    ClusterListResponse,
+    ClusterPage,
     ClusterResponse,
     ClusterWithJobResponse,
     CreateClusterRequest,
     DeleteClusterResponse,
     ReconnectClusterResponse,
+    ClusterFilter
 )
+from app.schemas.pagination import PaginationParams
 from app.utils.config import settings
 
 
@@ -127,23 +129,31 @@ class ClusterService:
     async def list_clusters(
         self,
         user: User,
-    ) -> ClusterListResponse | AdminClusterListResponse:
-        if user.is_admin:
-            clusters = await self.cluster_repository.list_all()
-            admin_items = [
-                AdminClusterResponse(
-                    **self._to_fields(c),
-                    tenant_id=str(c.tenant_id),
-                )
-                for c in clusters
-            ]
-            return AdminClusterListResponse(
-                clusters=admin_items, total=len(admin_items)
-            )
-
-        clusters = await self.cluster_repository.list_by_tenant(user.id)
-        items = [ClusterResponse(**self._to_fields(c)) for c in clusters]
-        return ClusterListResponse(clusters=items, total=len(items))
+        params: PaginationParams,
+        filters: ClusterFilter
+    ) -> ClusterPage | AdminClusterPage:
+       pagination = params.to_pagination()
+       
+       if user.is_admin:
+           clusters, total = await self.cluster_repository.list_all(
+               pagination=pagination,
+               filters=filters
+           )
+           
+           items = [
+               AdminClusterResponse(**self._to_fields(c), tenant_id=str(c.tenant_id))
+               for c in clusters
+           ]
+           
+           return AdminClusterPage.create(items, total=total, params=params)
+       
+       clusters, total = await self.cluster_repository.list_by_tenant(
+           user.id,
+           pagination=pagination
+       )
+       
+       items = [ClusterResponse(**self._to_fields(c)) for c in clusters]
+       return ClusterPage.create(items, total=total, params=params)
 
     async def get_kubeconfig(
         self,
