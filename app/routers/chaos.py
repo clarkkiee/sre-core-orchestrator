@@ -56,7 +56,7 @@ async def list_experiments(
 async def get_experiment(
     experiment_id: uuid.UUID, user: CurrentUser, chaos_service: ChaosServiceDep
 ) -> ChaosExperimentResponse:
-    result = await chaos_service.get_experiment(user.id, experiment_id)
+    result = await chaos_service.get_experiment(user, experiment_id)
     if not result:
         raise HTTPException(status_code=404, detail="Experiment not found")
     return result
