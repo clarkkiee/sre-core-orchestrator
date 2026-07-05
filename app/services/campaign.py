@@ -61,7 +61,7 @@ class CampaignService:
 
         await self.job_repository.db.commit()
 
-        celery_result = run_chaos_campaign_task.delay(
+        celery_result = run_chaos_caresolve_service_targetmpaign_task.delay(
             str(campaign.id), str(job.id)
         )
         await self.job_repository.update(job, celery_task_id=celery_result.id)

@@ -16,7 +16,7 @@ class StartChaosExperimentRequest(BaseModel):
     experiment_type: ExperimentType
     target_namespace: str
     target_label: str = Field(examples=["app=frontend"])
-    duration_seconds: int = Field(default=60, ge=10, le=600)
+    duration_seconds: int = Field(default=120, ge=10, le=600)
     configuration: dict[str, Any] | None = None
 
 
