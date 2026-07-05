@@ -56,7 +56,7 @@ async def get_campaign(
     user: CurrentUser,
     campaign_service: CampaignServiceDep,
 ) -> CampaignResponse:
-    result = await campaign_service.get_campaign(user.id, campaign_id)
+    result = await campaign_service.get_campaign(user, campaign_id)
     if not result:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return result

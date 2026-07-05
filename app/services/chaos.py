@@ -18,6 +18,7 @@ from app.schemas.chaos import (
 )
 from app.schemas.pagination import PaginationParams
 from app.tasks.chaos_tasks import run_chaos_experiment_task
+from app.exceptions.errors import NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -77,13 +78,19 @@ class ChaosService:
 
     async def get_experiment(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         experiment_id: uuid.UUID,
     ) -> ChaosExperimentResponse | None:
         exp = await self.chaos_repository.get_by_id(experiment_id)
-        if exp and exp.tenant_id == tenant_id:
-            return ChaosExperimentResponse(**self._experiment_to_fields(exp))
-        return None
+        if not exp:
+            msg = "Experiment not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and exp.tenant_id != user.id:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+            
+        return ChaosExperimentResponse(**self._experiment_to_fields(exp))
+ 
 
     async def list_experiment(
         self,

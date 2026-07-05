@@ -16,6 +16,7 @@ from app.schemas.campaign import (
 )
 from app.schemas.pagination import PaginationParams
 from app.tasks.campaign_tasks import run_chaos_campaign_task
+from app.exceptions.errors import NotFoundError
 
 
 class CampaignService:
@@ -60,7 +61,7 @@ class CampaignService:
 
         await self.job_repository.db.commit()
 
-        celery_result = run_chaos_campaign_task.delay(
+        celery_result = run_chaos_caresolve_service_targetmpaign_task.delay(
             str(campaign.id), str(job.id)
         )
         await self.job_repository.update(job, celery_task_id=celery_result.id)
@@ -69,13 +70,17 @@ class CampaignService:
 
     async def get_campaign(
         self,
-        tenant_id: uuid.UUID,
+        user: User,
         campaign_id: uuid.UUID,
     ) -> CampaignResponse | None:
         campaign = await self.campaign_repository.get_by_id(campaign_id)
-        if campaign and campaign.tenant_id == tenant_id:
-            return self._campaign_to_response(campaign)
-        return None
+        if not campaign:
+            msg = "Chaos campaign not found"
+            raise NotFoundError(msg)
+        if not user.is_admin and campaign.tenant_id != user.id:
+            msg = "Cluster not found"
+            raise NotFoundError(msg)
+        return self._campaign_to_response(campaign)
 
     async def list_campaigns(
         self,

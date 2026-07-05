@@ -440,9 +440,11 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
     target_clusterip = (
         str(service_target.get("clusterIP", "")) if service_target else ""
     )
+    target_health_path = (
+        service_target.get("health_path") if service_target else None
+    )
 
     # PHASE 4: baseline → fault → recovery (shared single-run logic).
-    # Map the shared phase labels onto this job's 30→95 progress band.
     _phase_pct = {
         "BASELINE": 30,
         "INJECTING_CHAOS": 50,
@@ -465,7 +467,7 @@ async def _run_chaos_experiment_phases(  # noqa: PLR0913
         target_clusterip=target_clusterip,
         session=session,
         vm_url=cluster.victoriametrics_url,
-        health_path=None,
+        health_path=target_health_path,
         on_phase=on_phase,
     )
 

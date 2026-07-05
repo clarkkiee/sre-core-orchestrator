@@ -15,6 +15,7 @@ from app.routers.deployments import router as deployments_router
 from app.routers.evaluations import router as evaluation_router
 from app.routers.metrics import router as metrics_router
 from app.routers.users import router as users_router
+from app.routers.analytics import router as analytics_router
 
 
 @asynccontextmanager
@@ -52,6 +53,7 @@ api_router.include_router(chaos_router)
 api_router.include_router(campaign_router)
 api_router.include_router(metrics_router)
 api_router.include_router(evaluation_router)
+api_router.include_router(analytics_router)
 
 @api_router.get("/health")
 async def health_check() -> dict[str, str]:

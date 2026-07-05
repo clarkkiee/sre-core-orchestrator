@@ -124,32 +124,38 @@ class LitmusChaosManager:
                     LITMUS_NAMESPACE,
                     kubeconfig_path=kc,
                 )
+                logger.info("Litmus operator already deployed, skipping")
             except LitmusCommandError:
                 logger.info("Litmus operator not found, installing")
-            else:
-                logger.info("Litmus operator already deployed, skipping")
-                return
-
-            # Install operator from manifest
-            manifest_url = f"https://litmuschaos.github.io/litmus/litmus-operator-v{self._litmus_version}.yaml"
-
-            await self._run_kubectl(
-                "apply",
-                "-f",
-                manifest_url,
-                kubeconfig_path=kc,
-            )
-
-            # Deploy chaos-exporter
-            cex_manifests = get_renderer().render_to_dicts(
-                "litmus/chaos-exporter.yaml.j2",
-                namespace=LITMUS_NAMESPACE,
-            )
-            for manifest in cex_manifests:
-                await self._run_kubectl_apply_stdin(
+                manifest_url = f"https://litmuschaos.github.io/litmus/litmus-operator-v{self._litmus_version}.yaml"
+                await self._run_kubectl(
+                    "apply",
+                    "-f",
+                    manifest_url,
                     kubeconfig_path=kc,
-                    manifest_yaml=yaml.safe_dump(manifest)
                 )
+
+            try:
+                await self._run_kubectl(
+                    "get",
+                    "deployment",
+                    "chaos-monitor",
+                    "-n",
+                    LITMUS_NAMESPACE,
+                    kubeconfig_path=kc,
+                )
+                logger.info("chaos-exporter already deployed, skipping")
+            except LitmusCommandError:
+                logger.info("chaos-exporter not found, installing")
+                cex_manifests = get_renderer().render_to_dicts(
+                    "litmus/chaos-exporter.yaml.j2",
+                    namespace=LITMUS_NAMESPACE,
+                )
+                for manifest in cex_manifests:
+                    await self._run_kubectl_apply_stdin(
+                        kubeconfig_path=kc,
+                        manifest_yaml=yaml.safe_dump(manifest)
+                    )
 
             # Poll until chaos-operator-ce deployment is available
             elapsed = 0

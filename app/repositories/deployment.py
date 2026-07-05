@@ -2,11 +2,11 @@
 
 import uuid
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, or_, select, func
 
 from app.models.deployment import Deployment
 from app.repositories.base import BaseRepository
-from app.schemas.deployment import DeploymentFilter
+from app.schemas.deployment import DeploymentFilter, DeploymentStatus
 from app.schemas.pagination import Pagination
 
 
@@ -57,6 +57,19 @@ class DeploymentRepository(BaseRepository[Deployment]):
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+    
+    async def count_by_status(
+        self,
+        tenant_id: uuid.UUID | None = None
+    ) -> dict[DeploymentStatus, int]:
+        stmt = select(Deployment.status, func.count()).group_by(Deployment.status)
+        if tenant_id is not None:
+            stmt = stmt.where(Deployment.tenant_id == tenant_id)
+        result = await self.db.execute(stmt)
+        counts = {status: count for status, count in result.all()}
+        return {
+            status: counts.get(status, 0) for status in DeploymentStatus
+        }
 
     @staticmethod
     def _apply_filters(

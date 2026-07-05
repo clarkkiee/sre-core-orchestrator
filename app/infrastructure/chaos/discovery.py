@@ -204,11 +204,13 @@ async def resolve_service_target(
                     picked = _pick_service_port(svc)
                     if not picked:
                         return None
+                    containers = dep.spec.template.spec.containers or []
                     return {
                         "name": svc.metadata.name,
                         "port": picked[0],
                         "protocol": picked[1],
                         "clusterIP": picked[2],
+                        "health_path": _find_app_health_path(containers),
                     }
 
         return None

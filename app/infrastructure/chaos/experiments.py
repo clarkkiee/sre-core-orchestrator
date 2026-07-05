@@ -8,7 +8,7 @@ import yaml
 
 from app.utils.config import settings
 
-_RESERVED_CONFIG_KEYS = {"probes"}
+_RESERVED_CONFIG_KEYS = {"probes", "TOTAL_CHAOS_DURATION"}
 
 @lru_cache
 def _registry() -> dict[str, dict[str, Any]]:

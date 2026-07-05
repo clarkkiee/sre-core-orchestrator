@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, and_, select, text, or_
+from sqlalchemy import Select, and_, select, text, or_, func
 
 from app.models.cluster import Cluster, ClusterStatus
 from app.schemas.cluster import ClusterFilter
@@ -89,6 +89,19 @@ class ClusterRepository(BaseRepository[Cluster]):
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+    
+    async def count_by_status(
+        self,
+        tenant_id: uuid.UUID | None = None
+    ) -> dict[ClusterStatus, int]:
+        stmt = select(Cluster.status, func.count()).group_by(Cluster.status)
+        if tenant_id is not None:
+            stmt = stmt.where(Cluster.tenant_id == tenant_id)
+        result = await self.db.execute(stmt)
+        counts = {status: count for status, count in result.all()}
+        return {
+            status: counts.get(status, 0) for status in ClusterStatus
+        }
 
     @staticmethod
     def _apply_filters(
