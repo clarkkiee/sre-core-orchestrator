@@ -16,6 +16,8 @@ def _make_session_maker() -> async_sessionmaker[AsyncSession]:
         pool_size=2,
         max_overflow=3,
         pool_timeout=settings.POSTGRES_POOL_TIMEOUT,
+        pool_pre_ping=True,
+        pool_recycle=300,
         echo=settings.LOG_LEVEL == "DEBUG",
         future=True,
     )

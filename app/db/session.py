@@ -12,6 +12,8 @@ engine = create_async_engine(
     pool_size=settings.POSTGRES_POOL_SIZE,
     max_overflow=settings.POSTGRES_MAX_OVERFLOW,
     pool_timeout=settings.POSTGRES_POOL_TIMEOUT,
+    pool_pre_ping=True,
+    pool_recycle=300,
     echo=settings.LOG_LEVEL == "DEBUG",
     future=True,
 )
