@@ -113,15 +113,9 @@ prod = [
     "sentry-sdk[fastapi]>=1.40.0",  # Error tracking
 ]
 
-[project.scripts]
-# CLI commands
-chaos-api = "app.cli:main"
-
 #[project.urls]
-#Homepage = "https://github.com/yourusername/chaos-platform-backend"
-#Documentation = "https://docs.chaos-platform.dev"
-#Repository = "https://github.com/yourusername/chaos-platform-backend"
-#Issues = "https://github.com/yourusername/chaos-platform-backend/issues"
+#Repository = "https://github.com/clarkkiee/sre-core-orchestrator"
+#Issues = "https://github.com/clarkkiee/sre-core-orchestrator/issues"
 
 # =============================================================================
 # Build System (using modern build backend)
