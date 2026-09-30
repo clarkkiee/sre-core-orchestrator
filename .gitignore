@@ -213,9 +213,6 @@ docker/ssh/
 # Go agent build artifacts
 agent/bin/
 
-# Docs
-docs/
-
 # vscode
 .vscode/
 data/gzip/
