@@ -18,6 +18,8 @@ The project combines a FastAPI backend, Celery background workers, a Go orchestr
 
 ## Architecture and Components
 
+![Cluster Architecture](docs/assets//cluster-architecture.png)
+
 | Component                 | Version or source                                                   | Role                                |
 | ------------------------- | ------------------------------------------------------------------- | ----------------------------------- |
 | Python                    | 3.12.1 in the Docker image; project requires `>=3.12`               | Backend and pipeline runtime        |
