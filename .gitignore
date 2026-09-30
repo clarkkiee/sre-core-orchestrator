@@ -218,3 +218,4 @@ docs/
 
 # vscode
 .vscode/
+data/gzip/
