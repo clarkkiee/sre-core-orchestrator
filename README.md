@@ -216,7 +216,7 @@ This platform already tested and simulated in the Linux (Ubuntu) environment. Th
 
 ## License
 
-This project declares the **MIT License** in `pyproject.toml`. See the repository metadata for the current license terms.
+MIT License - see [LICENSE](LICENSE) file for details
 
 ## Authors
 
