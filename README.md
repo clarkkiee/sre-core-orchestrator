@@ -208,7 +208,7 @@ The repository also contains focused tests for the metrics client, black-box exp
 
 Dataset archives are documented in [data/README.md](data/README.md) and are attached to the GitHub release [v1.0.0](https://github.com/clarkkiee/sre-core-orchestrator/releases/tag/v1.0.0). Each archive contains a CSV file and has a corresponding SHA-256 checksum in `data/gzip/SHA256SUMS.txt`.
 
-## Compability Notes
+## Compatibility Notes
 
 This platform already tested and simulated in the Linux (Ubuntu) environment. The use of other operating systems as hosts for running the platform has not been fully tested, and there are several components specifically designed for the Linux (Ubuntu) environment. The author **strongly recommends** using Ubuntu to run all orchestrator components.
 
