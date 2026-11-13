@@ -283,7 +283,8 @@ class LinkerdManager:
                     kubeconfig_path=kubeconfig_path,
                 )
                 # Restart existing workloads so the admission webhook
-                # injects the proxy sidecar into already-running pods.
+                # injects the sidecar proxy into already-running pods.
+                logging.info("Rolling out namespaced workloads to detect recent service mesh - sidecar proxy injection")
                 await self._run_kubectl(
                     "rollout",
                     "restart",
@@ -292,6 +293,8 @@ class LinkerdManager:
                     ns,
                     kubeconfig_path=kubeconfig_path,
                 )
+                
+                logging.info("Checking Rolling out process")
                 await self._run_kubectl(
                     "rollout",
                     "status",
@@ -301,6 +304,7 @@ class LinkerdManager:
                     "--timeout=600s",
                     kubeconfig_path=kubeconfig_path,
                 )
+                
             logger.info("Enabling Namespace Injection Success")
         except LinkerdCommandError as e:
             msg = f"Linkerd Namespaces Injection failed: {e}"
