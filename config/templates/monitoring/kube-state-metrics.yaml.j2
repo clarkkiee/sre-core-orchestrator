@@ -36,9 +36,9 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
     verbs: ["list", "watch"]
-  - apiGroups: ["autoscaling"]
+  {% comment %} - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
-    verbs: ["list", "watch"]
+    verbs: ["list", "watch"] {% endcomment %}
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies", "ingresses"]
     verbs: ["list", "watch"]

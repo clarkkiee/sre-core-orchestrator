@@ -4,6 +4,8 @@ kind: ChaosEngine
 metadata:
   name: {{ engine_name }}
   namespace: {{ namespace }}
+  annotations:
+    linkerd.io/inject: interleaved
 spec:
   appinfo:
     appns: {{ namespace }}
@@ -15,6 +17,11 @@ spec:
     runner:
       runnerAnnotation:
         linkerd.io/inject: disabled
+  initContainers:
+    restart: OnFailure
+    volumeMounts:
+      - name: chaos-engine
+        path: ./opts/data/
   experiments:
     - name: {{ experiment_type }}
       spec:
